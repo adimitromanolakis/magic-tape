@@ -14,8 +14,9 @@ extractor and `mpv` the player; Rust replaces only the fzf/jq plumbing and adds 
 "improve" it by adding a YouTube API client or a Rust yt-dlp port — see §6.1 for why the shelling
 out is load-bearing.
 
-State at the time of writing: `v0.2.0`, ~5.1k lines across 16 files (10 modules + 6 UI
-modules), 25 unit tests + 2 opt-in network tests, zero clippy warnings. Not a git repository.
+State at the time of writing: `v0.2.0`, 16 files (10 modules + 6 UI modules), 32 unit tests + 2
+opt-in network tests, zero clippy warnings. Tracked in git; tag `v0.2.0` marks the first working
+release.
 
 ## 2. Quick start
 
@@ -58,6 +59,12 @@ Single window, single-threaded UI, all slow work on worker threads.
 Rules that keep this sane:
 
 - **`App` owns everything mutable; UI modules take `&mut App`.** No interior mutability, no Rc/RefCell.
+- **Never call `Store` file readers from the UI.** `Store::subscriptions()`, `watch_history()` and
+  friends hit the disk on every call; the sidebar, the detail pane and the Settings window all need
+  them every frame, so `App` caches them (`App::subscriptions`, `App::is_subscribed`) and reloads
+  after any write (`reload_subscriptions()` after import/subscribe/unsubscribe). Calling
+  `store.is_subscribed()` in a per-frame path is a regression — the detail pane's Subscribe button
+  used to re-read and re-parse the whole file on every repaint.
 - **`Worker::spawn(label, closure)`** returns a closure producing one `Outcome`. The `label` is
   only for debug logs; the closure does the work. Never spawn from the UI without a label.
 - **The UI never blocks.** `logic()` drains `worker.drain()` every frame and calls
@@ -69,19 +76,19 @@ Rules that keep this sane:
 | File | Lines | Responsibility |
 | --- | --- | --- |
 | `src/main.rs` | 352 | Window/panel composition, CLI args, key handling, selection movement |
-| `src/app.rs` | 892 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
+| `src/app.rs` | 1082 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
 | `src/model.rs` | 643 | `Video`/`Channel`/`Comment` types + **all** yt-dlp JSON parsing, time/number formatting |
-| `src/yt.rs` | 411 | The yt-dlp command line; one `run()` that logs everything; URL encode/decode |
+| `src/yt.rs` | 411 | The yt-dlp command line; one `run()` that logs everything; per-video comment files; URL encode/decode |
 | `src/player.rs` | 293 | mpv invocation, log forwarding, exit-status watcher, notifications, `opener` |
 | `src/store.rs` | 366 | Watch history, liked, search history, last action, subscriptions, thumb paths |
 | `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
 | `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
 | `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
-| `src/ui/sidebar.rs` | 195 | Nav, feed list, subscription quick access, replay-previous-action |
+| `src/ui/sidebar.rs` | 248 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 228 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
 | `src/ui/video_list.rs` | 427 | Virtualised grid, compact list, channel list, context menus, empty state |
 | `src/ui/detail.rs` | 338 | Right panel: thumbnail, action buttons, description, comments |
-| `src/ui/settings.rs` | 374 | Settings window (4 tabs) + shortcuts window |
+| `src/ui/settings.rs` | 396 | Settings window (4 tabs) + shortcuts window |
 | `src/ui/toasts.rs` | 54 | Toast overlay (anchored below the toolbar) + status bar |
 | `src/ui/mod.rs` | 60 | Colors, `card()`, text measurement and `ellipsize()` |
 
@@ -115,6 +122,10 @@ Each yt-dlp call site passes a label to `run_output`/`run_output_in`: `list-feed
 `list-playlists`, `search-channels`, `import-subscriptions`, `video-metadata`, `download`,
 `version`, `update` — plus an `availability check` logged by `YtDlp::available()`. Add a label when
 adding a call.
+
+**Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
+frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
+request (`tasks.rs` keeps one in a `OnceLock` for all workers).
 
 **Errors** — `anyhow::Result` in the plumbing layer, `bail!` for expected user-facing failures.
 Every failure becomes a toast *and* a log line; never swallow an error silently.
@@ -174,6 +185,9 @@ Everything in this section cost a debugging cycle. It is the most important part
 
 This is a new API surface; several things differ from older tutorials.
 
+0. **Panels and closures fight over borrows.** A quick-access list cannot hold `&App.subscriptions`
+   while the filter box mutates `App` and row clicks need `&mut App`. Either scope the immutable
+   borrow (clone the rows, or compute values first) or split the draw into phases.
 1. **`eframe::App` has no `update()`.** It is `fn logic(&mut self, ctx, frame)` for non-UI work and
    `fn ui(&mut self, ui: &mut egui::Ui, frame)` for drawing. Drain worker results in `logic()`.
 2. **Panels are `Panel::left(id).show(ui, …)`, not `SidePanel::…show(ctx, …)`.** `Panel::top/bottom/
@@ -248,9 +262,14 @@ allowed through it, action commands are not.
 - **The pinned client is a single value.** A real fallback chain (try `default`, then `tv`) would
   need a retry loop, since mpv accepts only one client per invocation.
 - **Comment loading is slow** (3–5 s) and is triggered on selection; it runs on a worker but the
-  detail pane shows a spinner meanwhile.
+  detail pane shows a spinner meanwhile. Each video gets its own `~/.cache/magic-tape/comments/
+  <video id>.info.json` (a single shared file let two quick selections clobber each other), and the
+  directory is pruned to the newest 20 files after each load.
 - **Notifications are best-effort** via `notify-rust`; no D-Bus fallback chain like the shell
   script's notify-send → kitty → osascript.
+- **The quick-access panel draws at most 200 rows** and relies on its filter box beyond that
+  (`FILTER_THRESHOLD` / `MAX_QUICK_ACCESS_ROWS` in `ui/sidebar.rs`). The Channels section lists
+  everything; virtualising the sidebar list would be the next step.
 - **Thumbnails are unbounded in memory** (texture cache grows for the session); the on-disk cache
   is clearable from Settings → Maintenance.
 - The two `#[ignore]`d live tests are the only automated playback coverage; there is no automated
@@ -264,6 +283,8 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Subscription cache & quick-access filter | `subscription_lookup_uses_the_cache`, `subscription_filter_matches_case_insensitively_and_sorts` |
+| Comment metadata files | `video_stamp_is_per_video_and_path_safe`, `comment_files_are_pruned_to_the_cap` |
 | Store round-trips | `likes_are_idempotent`, `subscriptions_roundtrip`, `history_entries_roundtrip`, `search_history_is_deduped_and_reversed` |
 | Network / playback (opt-in) | `live_plays_page_url_through_mpv`, `live_lists_formats` |
 

@@ -113,7 +113,7 @@ fn actions(app: &mut App, ui: &mut egui::Ui, url: &str) {
         }
         let subscribed = app
             .current_video()
-            .map(|v| app.store.is_subscribed(&v.channel_id))
+            .map(|v| app.is_subscribed(&v.channel_id))
             .unwrap_or(false);
         let sub_label = if subscribed { "Subscribed" } else { "Subscribe" };
         if ui

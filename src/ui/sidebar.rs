@@ -3,6 +3,7 @@ use eframe::egui;
 use crate::app::{App, Section};
 use crate::model::{DurationFilter, Feed};
 use crate::ui::{accent, card, muted};
+use crate::yt;
 
 pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
@@ -70,7 +71,7 @@ fn nav(app: &mut App, ui: &mut egui::Ui, label: &str, section: Section) {
                 app.history.reverse();
             }
             Section::Channels => {
-                let channels = app.store.subscriptions();
+                let channels = app.subscriptions.clone();
                 app.channel_results = channels
                     .into_iter()
                     .map(|(id, name)| crate::model::Channel {
@@ -138,13 +139,35 @@ fn replay(app: &mut App) {
     app.load_feed(app.feed, action.start);
 }
 
+/// Quick access to the local subscription list.
+///
+/// The list can run to thousands of channels, so it is filtered rather than
+/// silently truncated: a filter box appears once the list is long enough to
+/// need one, and the row count always says how much is hidden.
 fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
-    let subs = app.store.subscriptions();
-    egui::ScrollArea::vertical()
-        .max_height(240.0)
-        .id_salt("subs_scroll")
-        .show(ui, |ui| {
-            if subs.is_empty() {
+    let total = app.subscriptions.len();
+
+    if total > FILTER_THRESHOLD {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.subs_filter)
+                .hint_text("Filter channels...")
+                .desired_width(ui.available_width())
+                .font(egui::TextStyle::Small),
+        );
+        ui.add_space(2.0);
+    }
+
+    // Owned copies: the filter box above and the row clicks below both need
+    // `&mut App`, so the list cannot hold a borrow of the cache.
+    let matches = app.filtered_subscriptions();
+    let filtering = !app.subs_filter.trim().is_empty();
+    let shown = matches.len().min(MAX_QUICK_ACCESS_ROWS);
+
+    if total == 0 {
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .id_salt("subs_scroll")
+            .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new("No subscriptions imported yet")
                         .size(12.0)
@@ -153,29 +176,39 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
                 if ui.button("Import from YouTube").clicked() {
                     app.import_subscriptions();
                 }
-                return;
-            }
-            for (id, name) in subs.iter().take(200) {
+            });
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .max_height(240.0)
+        .id_salt("subs_scroll")
+        .show(ui, |ui| {
+            for (id, name) in matches.iter().take(MAX_QUICK_ACCESS_ROWS) {
                 let selected = app.section == Section::Feeds
                     && app.feed == Feed::Channel
                     && app.channel_id == *id;
                 let response = ui
                     .selectable_label(selected, egui::RichText::new(name).size(12.5))
-                    .on_hover_text("Open this channel feed");
+                    .on_hover_text(format!("Open the feed of {name}"));
                 if response.clicked() {
-                    app.select(None);
-                    app.section = Section::Feeds;
-                    app.feed = Feed::Channel;
-                    app.channel_id = id.clone();
-                    app.channel_name = name.clone();
-                    app.load_feed(Feed::Channel, 0);
+                    open_channel(app, id, name);
                 }
             }
-            if subs.len() > 200 {
+            if matches.is_empty() {
                 ui.label(
-                    egui::RichText::new(format!("+{} more in Channels", subs.len() - 200))
-                        .size(11.0)
+                    egui::RichText::new("No channel matches that filter")
+                        .size(12.0)
                         .color(muted()),
+                );
+            } else if shown < matches.len() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "showing {shown} of {} - narrow it with the filter",
+                        matches.len()
+                    ))
+                    .size(11.0)
+                    .color(muted()),
                 );
             }
         });
@@ -183,9 +216,13 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     card(ui, |ui| {
         ui.label(
-            egui::RichText::new(format!("{} subscriptions", subs.len()))
-                .size(11.5)
-                .color(muted()),
+            egui::RichText::new(if filtering {
+                format!("{} matching of {total}", matches.len())
+            } else {
+                format!("{total} subscriptions")
+            })
+            .size(11.5)
+            .color(muted()),
         );
         if ui.button("Import subscriptions").clicked() {
             app.import_subscriptions();
@@ -193,4 +230,19 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-use crate::yt;
+/// Number of channels above which the quick-access list gets a filter box.
+const FILTER_THRESHOLD: usize = 15;
+
+/// Rows drawn before the panel asks the user to filter. Rendering every channel
+/// of a 1000-subscription account every frame is not worth it.
+const MAX_QUICK_ACCESS_ROWS: usize = 200;
+
+fn open_channel(app: &mut App, id: &str, name: &str) {
+    app.select(None);
+    app.section = Section::Feeds;
+    app.feed = Feed::Channel;
+    app.channel_id = id.to_string();
+    app.channel_name = name.to_string();
+    app.subs_filter.clear();
+    app.load_feed(Feed::Channel, 0);
+}

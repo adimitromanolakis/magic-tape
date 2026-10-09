@@ -4,6 +4,14 @@ use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, ListView, PinnedPlacement, Theme};
 use crate::ui::{accent, muted};
 
+pub fn theme_label(theme: Theme) -> &'static str {
+    match theme {
+        Theme::Dark => "Dark",
+        Theme::Light => "Light",
+        Theme::System => "System",
+    }
+}
+
 pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     let mut open = app.show_settings;
     egui::Window::new("Settings")
@@ -85,15 +93,20 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
         ui.end_row();
         ui.label("Theme");
         egui::ComboBox::from_id_salt("theme")
-            .selected_text(match app.config.theme {
-                Theme::Dark => "Dark",
-                Theme::Light => "Light",
-                Theme::System => "System",
-            })
+            .selected_text(theme_label(app.config.theme))
             .show_ui(ui, |ui| {
-                let _ = ui.selectable_label(app.config.theme == Theme::Dark, "Dark");
-                let _ = ui.selectable_label(app.config.theme == Theme::Light, "Light");
-                let _ = ui.selectable_label(app.config.theme == Theme::System, "System");
+                for (option, label) in [
+                    (Theme::Dark, "Dark"),
+                    (Theme::Light, "Light"),
+                    (Theme::System, "System"),
+                ] {
+                    if ui
+                        .selectable_label(app.config.theme == option, label)
+                        .clicked()
+                    {
+                        app.config.theme = option;
+                    }
+                }
             });
         ui.end_row();
     });
@@ -249,13 +262,22 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         egui::RichText::new(format!(
             "{} subscriptions stored locally",
-            app.store.subscriptions().len()
+            app.subscriptions.len()
         ))
         .size(11.5)
         .color(muted()),
     );
     if ui.button("Import subscriptions from YouTube").clicked() {
         app.import_subscriptions();
+    }
+    if !app.subscriptions.is_empty()
+        && ui.button("Reload subscription list").clicked()
+    {
+        app.reload_subscriptions();
+        app.toast(
+            format!("{} subscriptions reloaded", app.subscriptions.len()),
+            ToastKind::Info,
+        );
     }
     ui.add_space(6.0);
 

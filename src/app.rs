@@ -98,6 +98,9 @@ pub struct App {
     pub list_view: ListView,
     pub ytdlp_version: String,
     pub started: Instant,
+    pub subscriptions: Vec<(String, String)>,
+    pub subscription_ids: std::collections::HashSet<String>,
+    pub subs_filter: String,
     pub visible_rows: usize,
     pub scroll_to_index: Option<usize>,
     pub pending_select: Option<usize>,
@@ -168,6 +171,9 @@ impl App {
             list_view: ListView::Grid,
             ytdlp_version: String::new(),
             started: Instant::now(),
+            subscriptions: Vec::new(),
+            subscription_ids: std::collections::HashSet::new(),
+            subs_filter: String::new(),
             visible_rows: 0,
             scroll_to_index: None,
             pending_select: None,
@@ -185,6 +191,7 @@ impl App {
             "[magic-tape] config: {}",
             self.paths.config_file.display()
         );
+        self.reload_subscriptions();
         if !self.query.trim().is_empty() {
             let query = self.query.clone();
             self.start_search(&query);
@@ -453,6 +460,7 @@ impl App {
     pub fn unsubscribe(&mut self, name: &str) {
         match self.store.unsubscribe(name) {
             Ok(()) => {
+                self.reload_subscriptions();
                 self.channel_results
                     .retain(|c| !c.name.eq_ignore_ascii_case(name));
                 self.selected = None;
@@ -494,10 +502,13 @@ impl App {
             return;
         }
         match self.store.subscribe(&video.channel_id, &video.channel) {
-            Ok(()) => self.toast(
-                format!("Subscribed to {}", video.channel),
-                ToastKind::Success,
-            ),
+            Ok(()) => {
+                self.reload_subscriptions();
+                self.toast(
+                    format!("Subscribed to {}", video.channel),
+                    ToastKind::Success,
+                )
+            }
             Err(error) => self.toast(error.to_string(), ToastKind::Error),
         }
     }
@@ -582,6 +593,37 @@ impl App {
         Some((row as f32 * row_height - viewport_height / 2.0 + row_height).max(0.0))
     }
 
+    /// The subscription list is cached because the sidebar and the detail pane
+    /// need it on every frame; re-reading the file per frame was pointless I/O.
+    pub fn reload_subscriptions(&mut self) {
+        self.subscriptions = self.store.subscriptions();
+        self.subscription_ids = self
+            .subscriptions
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+    }
+
+    pub fn is_subscribed(&self, channel_id: &str) -> bool {
+        !channel_id.is_empty() && self.subscription_ids.contains(channel_id)
+    }
+
+    /// Subscriptions matching the quick-access filter, alphabetically.
+    ///
+    /// Returns owned copies: the panel needs `&mut App` for clicks, so it cannot
+    /// hold borrows of the cache while it draws.
+    pub fn filtered_subscriptions(&self) -> Vec<(String, String)> {
+        let needle = self.subs_filter.trim().to_lowercase();
+        let mut matches: Vec<(String, String)> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, name)| needle.is_empty() || name.to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        matches.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        matches
+    }
+
     pub fn item_count(&self) -> usize {
         match self.section {
             Section::Feeds => self.feed_state.videos.len(),
@@ -615,6 +657,49 @@ impl App {
         let previous = self.feed_state.start.saturating_sub(self.list_length());
         let feed = self.feed;
         self.load_feed(feed, previous);
+    }
+
+    /// Queues thumbnails for a slice of videos.
+    ///
+    /// Split out of `handle_outcome` so the feed's own buffer can be borrowed
+    /// mutably while the items in it are read - previously this needed a full
+    /// `Vec<Video>` clone on every page load.
+    fn ensure_all_thumbnails(app: &mut App, videos: &mut [Video]) {
+        let wanted: Vec<(String, String)> = videos
+            .iter()
+            .filter_map(|v| {
+                v.thumbnail
+                    .clone()
+                    .filter(|u| !u.is_empty())
+                    .map(|url| (v.id.clone(), url))
+            })
+            .collect();
+        for (id, url) in wanted {
+            app.ensure_image(&id, url);
+        }
+    }
+
+    /// Merges a freshly loaded page into the list, skipping ids already held.
+    ///
+    /// Returns how many videos were actually inserted, which is what the
+    /// caller needs to shift the selection when prepending.
+    fn merge_videos(existing: &mut Vec<Video>, incoming: Vec<Video>, prepend: bool) -> usize {
+        if incoming.is_empty() {
+            return 0;
+        }
+        let mut seen: std::collections::HashSet<String> =
+            existing.iter().map(|v| v.id.clone()).collect();
+        let fresh: Vec<Video> = incoming
+            .into_iter()
+            .filter(|v| seen.insert(v.id.clone()))
+            .collect();
+        let inserted = fresh.len();
+        if prepend {
+            existing.splice(0..0, fresh);
+        } else {
+            existing.extend(fresh);
+        }
+        inserted
     }
 
     pub fn ensure_thumbnail(&mut self, video: &Video) {
@@ -673,15 +758,20 @@ impl App {
                     self.selected = None;
                     self.detail = Default::default();
                 } else {
-                    let existing: Vec<String> = self
-                        .feed_state
-                        .videos
-                        .iter()
-                        .map(|v| v.id.clone())
-                        .collect();
-                    self.feed_state.videos.extend(
-                        videos.into_iter().filter(|v| !existing.contains(&v.id)),
-                    );
+                    // A page below the current start is older content: it belongs
+                    // in front, or the list would read newest-first again after
+                    // going back a page.
+                    let prepend = start < self.feed_state.start;
+                    let inserted = Self::merge_videos(&mut self.feed_state.videos, videos, prepend);
+                    // Prepending shifts every existing index down.
+                    if prepend
+                        && inserted > 0
+                        && let Some(current) = self.selected
+                    {
+                        self.selected = Some((current + inserted).min(
+                            self.feed_state.videos.len().saturating_sub(1),
+                        ));
+                    }
                 }
                 if let Some(target) = self.pending_select.take()
                     && target < self.feed_state.videos.len()
@@ -690,10 +780,11 @@ impl App {
                 }
                 self.feed_state.start = start;
                 self.feed_state.loading = false;
-                let videos: Vec<Video> = self.feed_state.videos.clone();
-                for video in &videos {
-                    self.ensure_thumbnail(video);
-                }
+                // Move the buffer out so it can be borrowed both as `&[Video]`
+                // (to read) and as `&mut App` (to queue the downloads).
+                let mut videos = std::mem::take(&mut self.feed_state.videos);
+                Self::ensure_all_thumbnails(self, &mut videos);
+                self.feed_state.videos = videos;
                 self.status = format!(
                     "{} videos loaded - {}",
                     self.feed_state.videos.len(),
@@ -731,6 +822,7 @@ impl App {
                 self.status = format!("{} channels found", self.channel_results.len());
             }
             Outcome::SubscriptionsImported { count, backup } => {
+                self.reload_subscriptions();
                 self.status = format!("Imported {count} subscriptions");
                 self.toast(
                     match backup.clone() {
@@ -878,6 +970,104 @@ mod tests {
         // row 5 of 4 columns starts at 500px; centred in a 400px viewport
         app.scroll_to_index = Some(20);
         assert_eq!(app.take_scroll_offset(4, 100.0, 400.0), Some(400.0));
+    }
+
+    fn video(id: &str) -> Video {
+        Video {
+            id: id.into(),
+            title: format!("title {id}"),
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            channel_id: "UC1".into(),
+            channel: "Chan".into(),
+            duration: None,
+            views: None,
+            thumbnail: None,
+            published: None,
+            is_live: false,
+            is_upcoming: false,
+        }
+    }
+
+    #[test]
+    fn merging_a_page_appends_at_the_end_by_default() {
+        let mut videos = vec![video("a"), video("b")];
+        let inserted = App::merge_videos(&mut videos, vec![video("c")], false);
+        assert_eq!(inserted, 1);
+        assert_eq!(
+            videos.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn merging_an_older_page_prepends_so_the_list_stays_in_feed_order() {
+        let mut videos = vec![video("d"), video("e")];
+        let inserted = App::merge_videos(&mut videos, vec![video("b"), video("c")], true);
+        assert_eq!(inserted, 2);
+        assert_eq!(
+            videos.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(),
+            ["b", "c", "d", "e"]
+        );
+    }
+
+    #[test]
+    fn merging_skips_ids_already_loaded() {
+        let mut videos = vec![video("a")];
+        let inserted = App::merge_videos(&mut videos, vec![video("a"), video("b")], false);
+        assert_eq!(inserted, 1, "only the unseen video counts as inserted");
+        assert_eq!(videos.len(), 2);
+        assert_eq!(videos[0].id, "a");
+    }
+
+    fn app_with_subscriptions(count: usize) -> App {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.subscriptions = (0..count)
+            .map(|i| {
+                (
+                    format!("UC{i:024}"),
+                    format!("Channel {i:03}"),
+                )
+            })
+            .collect();
+        app.subscription_ids = app.subscriptions.iter().map(|(id, _)| id.clone()).collect();
+        app
+    }
+
+    #[test]
+    fn subscription_lookup_uses_the_cache() {
+        let app = app_with_subscriptions(3);
+        assert!(app.is_subscribed("UC000000000000000000000000"));
+        assert!(!app.is_subscribed("UC999999999999999999999999"));
+        assert!(!app.is_subscribed(""), "an empty id is never subscribed");
+    }
+
+    #[test]
+    fn subscription_filter_matches_case_insensitively_and_sorts() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.subscriptions = vec![
+            ("UCa".to_string(), "Zebra channel".to_string()),
+            ("UCb".to_string(), "alpha CHANNEL".to_string()),
+            ("UCc".to_string(), "Beta Talk".to_string()),
+        ];
+
+        assert_eq!(app.filtered_subscriptions().len(), 3, "no filter shows all");
+
+        app.subs_filter = "channel".into();
+        let names: Vec<String> = app
+            .filtered_subscriptions()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["alpha CHANNEL".to_string(), "Zebra channel".to_string()],
+            "matches case-insensitively and sorts by name"
+        );
+
+        app.subs_filter = "talK".into();
+        assert_eq!(app.filtered_subscriptions().len(), 1, "matches mid-word");
+        app.subs_filter = "zzz".into();
+        assert!(app.filtered_subscriptions().is_empty());
     }
 
     #[test]

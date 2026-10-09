@@ -202,7 +202,7 @@ fn channel_controls(app: &mut App, ui: &mut egui::Ui) {
         app.search_channels(&app.channel_query.clone(), 0);
     }
     if ui.button("My subscriptions").on_hover_text("List your imported subscriptions").clicked() {
-        let subs = app.store.subscriptions();
+        let subs = app.subscriptions.clone();
         app.channel_results = subs
             .into_iter()
             .map(|(id, name)| crate::model::Channel {
