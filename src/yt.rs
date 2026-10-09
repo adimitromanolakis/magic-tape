@@ -154,7 +154,11 @@ impl YtDlp {
         let extractor = format!(
             "youtube:max_comments={max},all,{replies};comment_sort={sort}"
         );
-        let template = comments_dir.join("video");
+        // One file per video: a single shared template let two comment loads
+        // (fast enough arrowing through the grid) delete and rewrite each
+        // other's output.
+        let stamp = video_stamp(url);
+        let template = comments_dir.join(&stamp);
         let _ = std::fs::remove_file(template.with_extension("info.json"));
         self.run_output("video-metadata", &[
             "-q",
@@ -172,6 +176,7 @@ impl YtDlp {
             .with_context(|| format!("reading {}", path.display()))?;
         let (description, comments) = model::parse_info_json(&json);
         let count = model::comment_count(&json);
+        prune_comment_files(comments_dir, 20);
         Ok((description, comments, count))
     }
 
@@ -290,6 +295,56 @@ fn explain(feed: Feed, error: anyhow::Error) -> anyhow::Error {
     error
 }
 
+/// Keeps the most recent comment files and deletes the rest: one file per video
+/// would otherwise grow without bound in the cache directory.
+fn prune_comment_files(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, e.path()))
+        })
+        .collect();
+    if files.len() <= keep {
+        return;
+    }
+    files.sort_by_key(|(modified, _)| *modified);
+    for (_, path) in &files[..files.len() - keep] {
+        std::fs::remove_file(path).ok();
+    }
+}
+
+/// A filesystem-safe, collision-free stem for a video's metadata file.
+///
+/// Uses the `v=` parameter where present so repeated loads of the same video
+/// reuse one file, and falls back to a hash of the URL otherwise.
+fn video_stamp(url: &str) -> String {
+    let id = url
+        .split(['?', '&'])
+        .find_map(|part| part.strip_prefix("v="))
+        .filter(|id| {
+            !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        });
+    match id {
+        Some(id) => id.to_string(),
+        None => {
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in url.as_bytes() {
+                hash ^= *byte as u64;
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            format!("url-{hash:016x}")
+        }
+    }
+}
+
 pub fn urlencode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.as_bytes() {
@@ -344,6 +399,55 @@ mod tests {
         assert_eq!(urlencode("hello world"), "hello%20world");
         assert_eq!(urlencode("a+b&c"), "a%2Bb%26c");
         assert_eq!(urlencode("plain"), "plain");
+    }
+
+    #[test]
+    fn comment_files_are_pruned_to_the_cap() {
+        let dir = std::env::temp_dir().join(format!(
+            "mt-comments-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..8 {
+            std::fs::write(dir.join(format!("video{i}.info.json")), "{}").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        prune_comment_files(&dir, 3);
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left.len(), 3, "the cap is respected");
+        assert!(
+            left.contains(&"video7.info.json".to_string()),
+            "the newest files are the ones kept: {left:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn video_stamp_is_per_video_and_path_safe() {
+        let a = video_stamp("https://www.youtube.com/watch?v=5C_HPTJg5ek");
+        assert_eq!(a, "5C_HPTJg5ek");
+        assert_ne!(
+            a,
+            video_stamp("https://www.youtube.com/watch?v=abcdefghijk"),
+            "two videos must not share a metadata file"
+        );
+        assert_eq!(
+            video_stamp("https://www.youtube.com/watch?app=desktop&v=5C_HPTJg5ek"),
+            a,
+            "the v= parameter is found wherever it sits in the query"
+        );
+        let fallback = video_stamp("https://www.youtube.com/shorts/xyz");
+        assert!(fallback.starts_with("url-"));
+        assert!(fallback.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        assert_ne!(fallback, video_stamp("https://www.youtube.com/shorts/abc"));
     }
 
     #[test]

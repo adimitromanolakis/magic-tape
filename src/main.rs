@@ -28,7 +28,6 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native("magic-tape", options, Box::new(move |cc| {
-        cc.egui_ctx.set_visuals(visuals_for(Theme::Dark));
         Ok(Box::new(MagicTape::new(cc, startup)))
     }))
 }
@@ -36,6 +35,10 @@ fn main() -> eframe::Result {
 struct MagicTape {
     app: App,
     booted: bool,
+    /// The theme the context is currently styled with. `visuals_for` is only
+    /// applied when this changes, so it runs once per switch rather than once
+    /// per frame.
+    applied: Option<Theme>,
 }
 
 fn parse_args() -> Startup {
@@ -67,7 +70,11 @@ impl MagicTape {
     fn new(cc: &eframe::CreationContext<'_>, startup: Startup) -> Self {
         let mut app = App::new(&cc.egui_ctx, startup);
         app.list_view = app.config.list_view;
-        Self { app, booted: false }
+        Self {
+            app,
+            booted: false,
+            applied: None,
+        }
     }
 }
 
@@ -103,23 +110,21 @@ impl eframe::App for MagicTape {
         let ctx = ui.ctx().clone();
         self.handle_keys(&ctx);
 
-        let theme = self.app.config.theme;
-        let system_dark = ctx.style_of(egui::Theme::Dark).visuals.dark_mode;
-        let target = match theme {
-            Theme::Light => Theme::Light,
-            Theme::Dark => Theme::Dark,
+        let target = match self.app.config.theme {
             Theme::System => {
-                if system_dark {
+                if ctx.style_of(egui::Theme::Dark).visuals.dark_mode {
                     Theme::Dark
                 } else {
                     Theme::Light
                 }
             }
+            explicit => explicit,
         };
-        let target_dark = target == Theme::Dark;
-        if system_dark != target_dark {
+        if self.applied != Some(target) {
             ctx.set_visuals(visuals_for(target));
+            self.applied = Some(target);
         }
+        let target_dark = target == Theme::Dark;
 
         egui::Panel::left("sidebar")
             .resizable(true)

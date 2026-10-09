@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Handles work that must not block the UI thread.
 ///
@@ -96,15 +96,35 @@ impl Worker {
     }
 }
 
+/// One HTTP client for the whole process.
+///
+/// Building a `reqwest` client per download meant a fresh TLS handshake and
+/// connection pool for every thumbnail; a page of 20 videos created 20 of
+/// them. `OnceLock` is set on first use and shared by all worker threads.
+fn thumbnail_client() -> Result<&'static reqwest::blocking::Client> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::blocking::Client>> =
+        std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .user_agent("Mozilla/5.0 (X11; Linux x86_64) magic-tape")
+                .build()
+                .context("building the thumbnail HTTP client")
+        })
+        .as_ref()
+        .map_err(|_| anyhow::anyhow!("the thumbnail HTTP client could not be built"))
+}
+
 pub fn download_thumbnail(url: &str, dest: PathBuf) -> Result<()> {
     if dest.exists() {
         return Ok(());
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) magic-tape")
-        .build()?;
-    let bytes = client.get(url).send()?.error_for_status()?.bytes()?;
+    let bytes = thumbnail_client()?
+        .get(url)
+        .send()?
+        .error_for_status()?
+        .bytes()?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).ok();
     }
