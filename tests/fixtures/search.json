@@ -1,0 +1,88 @@
+{
+ "id": "rust programming",
+ "title": "rust programming",
+ "_type": "playlist",
+ "entries": [
+  {
+   "id": "5C_HPTJg5ek",
+   "title": "Rust in 100 Seconds",
+   "channel": "Fireship",
+   "channel_id": "UCsBjURrPoezykLs9EqgamOA",
+   "uploader": "Fireship",
+   "uploader_id": "@Fireship",
+   "url": "https://www.youtube.com/watch?v=5C_HPTJg5ek",
+   "duration": 149,
+   "view_count": 2549406,
+   "timestamp": null,
+   "release_timestamp": null,
+   "live_status": null,
+   "availability": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/5C_HPTJg5ek/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLDGE2GXUKjYf6-HRHfYYc40FmpZMw",
+     "width": 360,
+     "height": 202
+    },
+    {
+     "url": "https://i.ytimg.com/vi/5C_HPTJg5ek/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLBcfa4UXiKt9mva1T5fl_YNQJDoQw",
+     "width": 720,
+     "height": 404
+    }
+   ]
+  },
+  {
+   "id": "VXbRd5J0vNU",
+   "title": "Rust is the ugliest programming language invented in the last 40 years | DHH and Lex Fridman",
+   "channel": "Lex Clips",
+   "channel_id": "UCJIfeSCssxSC_Dhc5s7woww",
+   "uploader": "Lex Clips",
+   "uploader_id": "@LexClips",
+   "url": "https://www.youtube.com/watch?v=VXbRd5J0vNU",
+   "duration": 97,
+   "view_count": 16294,
+   "timestamp": null,
+   "release_timestamp": null,
+   "live_status": null,
+   "availability": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/VXbRd5J0vNU/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAyDXQUYIv-Wq0FPsVTom6ugL_BeQ",
+     "width": 360,
+     "height": 202
+    },
+    {
+     "url": "https://i.ytimg.com/vi/VXbRd5J0vNU/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCYI0XcZ8rnzigs9WIaiRVrTnL-Ow",
+     "width": 720,
+     "height": 404
+    }
+   ]
+  },
+  {
+   "id": "T-2dXr8CqCM",
+   "title": "Rust is now a tier-1 language at Microsoft",
+   "channel": "Let's Get Rusty",
+   "channel_id": "UCSp-OaMpsO8K0KkOqyBl7_w",
+   "uploader": "Let's Get Rusty",
+   "uploader_id": "@letsgetrusty",
+   "url": "https://www.youtube.com/watch?v=T-2dXr8CqCM",
+   "duration": 175,
+   "view_count": 30690,
+   "timestamp": null,
+   "release_timestamp": null,
+   "live_status": null,
+   "availability": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/T-2dXr8CqCM/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLB8Qb73OxTFHVddCPiisvuJgaI_bA",
+     "width": 360,
+     "height": 202
+    },
+    {
+     "url": "https://i.ytimg.com/vi/T-2dXr8CqCM/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLBdKPl_zxqyVuR3IhqsF31uEeAIlQ",
+     "width": 720,
+     "height": 404
+    }
+   ]
+  }
+ ]
+}

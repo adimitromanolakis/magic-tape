@@ -1,0 +1,23 @@
+[package]
+name = "magic-tape"
+version = "0.2.0"
+edition = "2024"
+description = "A native desktop client for YouTube subscriptions, feeds and search"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.104"
+dirs = "7.0.0"
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "wayland", "x11", "accesskit"] }
+egui = "0.35"
+env_logger = "0.11.11"
+image = "0.25.10"
+log = "0.4.34"
+notify-rust = "4.18.2"
+opener = "0.9.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls", "gzip", "charset"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+toml = "1.1.8"

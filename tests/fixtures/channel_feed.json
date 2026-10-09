@@ -1,0 +1,53 @@
+{
+ "id": "UCsBjURrPoezykLs9EqgamOA",
+ "channel": "Fireship",
+ "channel_id": "UCsBjURrPoezykLs9EqgamOA",
+ "title": "Fireship - Videos",
+ "_type": "playlist",
+ "entries": [
+  {
+   "id": "QZVzuq28eFw",
+   "title": "OpenAI\u2019s lead engineer was secretly a spy...",
+   "url": "https://www.youtube.com/watch?v=QZVzuq28eFw",
+   "duration": 306,
+   "view_count": 321000,
+   "timestamp": null,
+   "live_status": null,
+   "availability": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/QZVzuq28eFw/hq720_custom_3.jpg?sqp=CNjov9YG-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLDvPtXC-W7K2Zj1xD681gLErpObGQ",
+     "width": 360,
+     "height": 202
+    },
+    {
+     "url": "https://i.ytimg.com/vi/QZVzuq28eFw/hq720_custom_3.jpg?sqp=CNjov9YG-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLDEAiMiDQQbg9dQzL-gA9GBWat0lw",
+     "width": 720,
+     "height": 404
+    }
+   ]
+  },
+  {
+   "id": "wajoP_5Cpw8",
+   "title": "Every app on Earth is now open source... whether it likes it or not",
+   "url": "https://www.youtube.com/watch?v=wajoP_5Cpw8",
+   "duration": 356,
+   "view_count": 2900000,
+   "timestamp": null,
+   "live_status": null,
+   "availability": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/wajoP_5Cpw8/hq720_custom_1.jpg?sqp=CNjov9YG-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCkzEbmK8fA92n12EZaBKV6GN_c1Q",
+     "width": 360,
+     "height": 202
+    },
+    {
+     "url": "https://i.ytimg.com/vi/wajoP_5Cpw8/hq720_custom_1.jpg?sqp=CNjov9YG-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLCQ1ZgJPvESY0g03NlKlAtjOA1H1Q",
+     "width": 720,
+     "height": 404
+    }
+   ]
+  }
+ ]
+}

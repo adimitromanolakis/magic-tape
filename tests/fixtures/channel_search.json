@@ -1,0 +1,53 @@
+{
+ "id": "fireship",
+ "title": "fireship",
+ "_type": "playlist",
+ "entries": [
+  {
+   "id": "UCsBjURrPoezykLs9EqgamOA",
+   "title": "Fireship",
+   "channel": "Fireship",
+   "channel_id": "UCsBjURrPoezykLs9EqgamOA",
+   "uploader": "Fireship",
+   "uploader_id": "@Fireship",
+   "url": "https://www.youtube.com/channel/UCsBjURrPoezykLs9EqgamOA",
+   "thumbnails": [
+    {
+     "url": "//yt3.ggpht.com/3fPNbkf_xPyCleq77ZhcxyeorY97NtMHVNUbaAON_RBDH9ydL4hJkjxC8x_4mpuopkB8oI7Ct6Y=s88-c-k-c0x00ffffff-no-rj-mo",
+     "width": 88,
+     "height": 88
+    },
+    {
+     "url": "//yt3.ggpht.com/3fPNbkf_xPyCleq77ZhcxyeorY97NtMHVNUbaAON_RBDH9ydL4hJkjxC8x_4mpuopkB8oI7Ct6Y=s176-c-k-c0x00ffffff-no-rj-mo",
+     "width": 176,
+     "height": 176
+    }
+   ],
+   "channel_follower_count": 4300000,
+   "playlist_count": null
+  },
+  {
+   "id": "UC2Xd-TjJByJyK2w1zNwY0zQ",
+   "title": "Beyond Fireship",
+   "channel": "Beyond Fireship",
+   "channel_id": "UC2Xd-TjJByJyK2w1zNwY0zQ",
+   "uploader": "Beyond Fireship",
+   "uploader_id": "@beyondfireship",
+   "url": "https://www.youtube.com/channel/UC2Xd-TjJByJyK2w1zNwY0zQ",
+   "thumbnails": [
+    {
+     "url": "//yt3.ggpht.com/UjQ03W3C4Wm_WGj_J5ktcd6OJFV1rrVeJrtvtXQ6q_UUvvJcpZ6edLJWDZsToyB0G_huIZtM9Q=s88-c-k-c0x00ffffff-no-rj-mo",
+     "width": 88,
+     "height": 88
+    },
+    {
+     "url": "//yt3.ggpht.com/UjQ03W3C4Wm_WGj_J5ktcd6OJFV1rrVeJrtvtXQ6q_UUvvJcpZ6edLJWDZsToyB0G_huIZtM9Q=s176-c-k-c0x00ffffff-no-rj-mo",
+     "width": 176,
+     "height": 176
+    }
+   ],
+   "channel_follower_count": 464000,
+   "playlist_count": null
+  }
+ ]
+}
