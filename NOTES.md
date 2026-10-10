@@ -84,7 +84,7 @@ Rules that keep this sane:
 | `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
 | `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
 | `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
-| `src/ui/sidebar.rs` | 289 | Nav, feed list, subscription quick access, replay-previous-action |
+| `src/ui/sidebar.rs` | 277 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 228 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
 | `src/ui/video_list.rs` | 427 | Virtualised grid, compact list, channel list, context menus, empty state |
 | `src/ui/detail.rs` | 338 | Right panel: thumbnail, action buttons, description, comments |
