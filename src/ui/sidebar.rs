@@ -2,7 +2,7 @@ use eframe::egui;
 
 use crate::app::{App, Section};
 use crate::model::{DurationFilter, Feed};
-use crate::ui::{accent, card, muted, SCROLLBAR_GAP};
+use crate::ui::{accent, card, ellipsize, muted, SCROLLBAR_GAP};
 use crate::yt;
 
 pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
@@ -195,14 +195,21 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
             .id_salt("subs_scroll")
             .max_height(240.0)
             .show_rows(ui, row_height, matching, |ui, range| {
-                // egui draws the scrollbar over the right edge of the content
-                // instead of reserving room for it, so each row is sized to
-                // stop short of the bar. Sizing the row (rather than the scroll
-                // area) is what works: `max_width` narrows the box but the bar
-                // is drawn at the box's edge, so the text still ran underneath
-                // it. The height is the row height `show_rows` was told about,
-                // which keeps the scrollbar calibrated.
+                // egui draws a vertical scrollbar *over* the content instead of
+                // reserving room for it, so each row is allocated to stop short
+                // of the bar. Sizing the row (rather than the scroll area) is
+                // what works: `max_width` narrows the box, and the bar is then
+                // drawn at that box's edge, so the text still ran underneath it.
+                //
+                // The row is drawn by hand rather than with `selectable_label`
+                // because that centres its text, and because an explicit
+                // allocation is what keeps the height equal to the `row_height`
+                // `show_rows` was told about - which is what the scrollbar is
+                // calibrated from.
                 let width = (ui.available_width() - SCROLLBAR_GAP).max(60.0);
+                let font = egui::FontId::proportional(12.5);
+                let paint_font = font.clone();
+                let text = ui.visuals().text_color();
                 for index in range {
                     let Some(slot) = matches.get(index).copied() else {
                         continue;
@@ -210,18 +217,27 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
                     let Some((id, name)) = app.subscriptions.get(slot) else {
                         continue;
                     };
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
                     let selected = app.section == Section::Feeds
                         && app.feed == Feed::Channel
                         && app.channel_id == *id;
-                    // Clone just this row's text: the label owns it, and the
-                    // click below needs `&mut App` while the borrow is live.
-                    let (label, tooltip) = (name.clone(), format!("Open the feed of {name}"));
-                    let response = ui
-                        .add_sized(
-                            egui::vec2(width, row_height),
-                            egui::Button::selectable(selected, label),
-                        )
-                        .on_hover_text(tooltip);
+                    if selected || response.hovered() {
+                        let fill = if selected {
+                            ui.visuals().widgets.active.bg_fill
+                        } else {
+                            ui.visuals().widgets.hovered.bg_fill
+                        };
+                        ui.painter().rect_filled(rect, 4.0, fill);
+                    }
+                    let label = ellipsize(ui, name, &font, width - 12.0);
+                    ui.painter().text(
+                        egui::pos2(rect.left() + 6.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        label,
+                        paint_font.clone(),
+                        text,
+                    );
                     if response.clicked() {
                         let (id, name) = app.subscriptions[slot].clone();
                         open_channel(app, &id, &name);

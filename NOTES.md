@@ -84,7 +84,7 @@ Rules that keep this sane:
 | `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
 | `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
 | `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
-| `src/ui/sidebar.rs` | 261 | Nav, feed list, subscription quick access, replay-previous-action |
+| `src/ui/sidebar.rs` | 289 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 228 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
 | `src/ui/video_list.rs` | 427 | Virtualised grid, compact list, channel list, context menus, empty state |
 | `src/ui/detail.rs` | 338 | Right panel: thumbnail, action buttons, description, comments |
@@ -216,10 +216,16 @@ This is a new API surface; several things differ from older tutorials.
     `Label` inside a fixed-rect card forces layout side effects.
 12. **egui draws a vertical scrollbar *over* the content**; it does not reserve space for it.
     `ScrollArea::max_width` narrows the box, but the bar is then drawn at that box's edge, so the
-    text still runs underneath it. To keep a gap you must narrow the *rows* - the quick-access
-    panel uses `add_sized(width - SCROLLBAR_GAP, row_height, Button::selectable(..))`, and the
-    video grid computes its tile width from `available_width() - SCROLLBAR_GAP`.
-13. **`ScrollArea::show_rows` derives the scrollable content height from the row height you pass
+    text still runs underneath it. To keep a gap you must narrow the *rows*: the video grid
+    computes its tile width from `available_width() - SCROLLBAR_GAP`.
+13. **`Button::selectable` centres its text and 0.35 offers no way to change that**, so
+    `add_sized(.., Button::selectable(..))` is not a drop-in for `ui.selectable_label` - the
+    quick-access rows are drawn by hand instead (`allocate_exact_size` + `painter.text` with
+    `Align2::LEFT_CENTER` + `ui::ellipsize`). The same hand-rolled row keeps the height exactly
+    equal to the `row_height` given to `show_rows`, which is what the scrollbar is calibrated from.
+14. Keep the hand-rolled row's *hover* and *selected* fills. `allocate_exact_size(.., Sense::click())`
+    gives no visual feedback on its own.
+14. **`ScrollArea::show_rows` derives the scrollable content height from the row height you pass
     it, plus `item_spacing.y`.** If that row height is not what a row really takes, the scrollbar
     is calibrated for a list that does not exist: the thumb sits in the wrong place and the last
     rows cannot be scrolled to. Two lists had this bug and both are now derived from named
