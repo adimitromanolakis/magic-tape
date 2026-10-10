@@ -84,7 +84,7 @@ Rules that keep this sane:
 | `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
 | `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
 | `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
-| `src/ui/sidebar.rs` | 248 | Nav, feed list, subscription quick access, replay-previous-action |
+| `src/ui/sidebar.rs` | 261 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 228 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
 | `src/ui/video_list.rs` | 427 | Virtualised grid, compact list, channel list, context menus, empty state |
 | `src/ui/detail.rs` | 338 | Right panel: thumbnail, action buttons, description, comments |
@@ -214,6 +214,21 @@ This is a new API surface; several things differ from older tutorials.
     second uses `ui.horizontal_wrapped`.
 11. Truncating long card titles is done with `ui::ellipsize()` + `painter.text()`, because a
     `Label` inside a fixed-rect card forces layout side effects.
+12. **egui draws a vertical scrollbar *over* the content**; it does not reserve space for it.
+    `ScrollArea::max_width` narrows the box, but the bar is then drawn at that box's edge, so the
+    text still runs underneath it. To keep a gap you must narrow the *rows* - the quick-access
+    panel uses `add_sized(width - SCROLLBAR_GAP, row_height, Button::selectable(..))`, and the
+    video grid computes its tile width from `available_width() - SCROLLBAR_GAP`.
+13. **`ScrollArea::show_rows` derives the scrollable content height from the row height you pass
+    it, plus `item_spacing.y`.** If that row height is not what a row really takes, the scrollbar
+    is calibrated for a list that does not exist: the thumb sits in the wrong place and the last
+    rows cannot be scrolled to. Two lists had this bug and both are now derived from named
+    constants so the arithmetic cannot drift:
+    - compact video list: `LIST_ROW_CONTENT_H (68) + 2 * LIST_ROW_MARGIN (4) = 76` (was 74)
+    - channel list: `CHANNEL_ROW_CONTENT_H (40) + 2 * CHANNEL_ROW_MARGIN (6) = 52` (was 62 -
+      off by 10px per row, so with 480 rows the last 90 were unreachable)
+    Changing a row's content height means changing the matching constant, not the literal passed
+    to `show_rows`.
 
 ### 6.4 Verifying changes on this machine
 
@@ -267,9 +282,9 @@ allowed through it, action commands are not.
   directory is pruned to the newest 20 files after each load.
 - **Notifications are best-effort** via `notify-rust`; no D-Bus fallback chain like the shell
   script's notify-send → kitty → osascript.
-- **The quick-access panel draws at most 200 rows** and relies on its filter box beyond that
-  (`FILTER_THRESHOLD` / `MAX_QUICK_ACCESS_ROWS` in `ui/sidebar.rs`). The Channels section lists
-  everything; virtualising the sidebar list would be the next step.
+- **The quick-access panel lists every subscription**, virtualised with `show_rows` so hundreds
+  of channels cost nothing per frame. The filter box appears past `FILTER_THRESHOLD` (15) as a
+  convenience, not as the only way to reach a channel.
 - **Thumbnails are unbounded in memory** (texture cache grows for the session); the on-disk cache
   is clearable from Settings → Maintenance.
 - The two `#[ignore]`d live tests are the only automated playback coverage; there is no automated

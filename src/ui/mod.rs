@@ -32,6 +32,11 @@ pub fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::InnerRe
         .show(ui, add)
 }
 
+/// Horizontal space kept free at the right of a scrollable list so the
+/// scrollbar never covers the last characters of a row. egui draws the bar
+/// over the content instead of reserving room for it.
+pub const SCROLLBAR_GAP: f32 = 14.0;
+
 pub fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
     let font = font.clone();
     ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, egui::Color32::WHITE))

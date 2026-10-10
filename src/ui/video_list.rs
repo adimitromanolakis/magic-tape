@@ -3,7 +3,22 @@ use eframe::egui;
 use crate::app::{App, Section, ToastKind};
 use crate::config::ListView;
 use crate::model::Video;
-use crate::ui::{accent, ellipsize, muted, warn_color};
+use crate::ui::{accent, ellipsize, muted, warn_color, SCROLLBAR_GAP};
+
+/// Row geometry for the compact video list.
+///
+/// `show_rows` derives the scrollable content height from the row height it is
+/// given, so it has to equal the height a row really takes: the thumbnail plus
+/// the frame's margin. When these disagree the scrollbar is calibrated for a
+/// list that does not exist and the last rows cannot be scrolled to.
+const LIST_ROW_CONTENT_H: f32 = 68.0;
+const LIST_ROW_MARGIN: f32 = 4.0;
+const LIST_ROW_H: f32 = LIST_ROW_CONTENT_H + 2.0 * LIST_ROW_MARGIN;
+
+/// Row geometry for the channel list, same rule as above.
+const CHANNEL_ROW_CONTENT_H: f32 = 40.0;
+const CHANNEL_ROW_MARGIN: f32 = 6.0;
+const CHANNEL_ROW_H: f32 = CHANNEL_ROW_CONTENT_H + 2.0 * CHANNEL_ROW_MARGIN;
 
 pub fn content(app: &mut App, ui: &mut egui::Ui) {
     match app.section {
@@ -39,7 +54,9 @@ fn video_list(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
-    let available = ui.available_width();
+    // The scrollbar is drawn over the content, so the cards are laid out in the
+    // width that is left once its strip is removed.
+    let available = (ui.available_width() - SCROLLBAR_GAP).max(200.0);
     let columns = ((available / 260.0).floor() as usize).clamp(1, 6);
     app.columns = columns;
     let tile = (available - 8.0 * (columns.saturating_sub(1)) as f32) / columns as f32;
@@ -173,11 +190,12 @@ fn grid_card(
 }
 
 fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
-    let row_h = 74.0;
+    let row_h = LIST_ROW_H;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("list_scroll")
-        .auto_shrink([false, false]);
+        .auto_shrink([false, false])
+        .max_width((ui.available_width() - SCROLLBAR_GAP).max(200.0));
     let scroll = match app.take_scroll_offset(1, row_h, viewport) {
         Some(offset) => scroll.vertical_scroll_offset(offset),
         None => scroll,
@@ -197,7 +215,7 @@ fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
                         ui.visuals().panel_fill
                     })
                     .corner_radius(6.0)
-                    .inner_margin(4.0);
+                    .inner_margin(LIST_ROW_MARGIN);
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let texture = app.thumbs.get(&video.id);
@@ -306,11 +324,12 @@ fn channel_list(app: &mut App, ui: &mut egui::Ui) {
         });
         return;
     }
-    let row_h = 62.0;
+    let row_h = CHANNEL_ROW_H;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("channels_scroll")
-        .auto_shrink([false, false]);
+        .auto_shrink([false, false])
+        .max_width((ui.available_width() - SCROLLBAR_GAP).max(200.0));
     let scroll = match app.take_scroll_offset(1, row_h, viewport) {
         Some(offset) => scroll.vertical_scroll_offset(offset),
         None => scroll,
@@ -330,13 +349,16 @@ fn channel_list(app: &mut App, ui: &mut egui::Ui) {
                         ui.visuals().panel_fill
                     })
                     .corner_radius(6.0)
-                    .inner_margin(6.0)
+                    .inner_margin(CHANNEL_ROW_MARGIN)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let texture = app.thumbs.get(&channel.id);
                             let response = ui.add(
                                 egui::Image::new(&texture)
-                                    .fit_to_exact_size(egui::vec2(72.0, 40.0))
+                                    .fit_to_exact_size(egui::vec2(
+                                        72.0,
+                                        CHANNEL_ROW_CONTENT_H,
+                                    ))
                                     .corner_radius(4.0)
                                     .sense(egui::Sense::click()),
                             );

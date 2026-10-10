@@ -2,7 +2,7 @@ use eframe::egui;
 
 use crate::app::{App, Section};
 use crate::model::{DurationFilter, Feed};
-use crate::ui::{accent, card, muted};
+use crate::ui::{accent, card, muted, SCROLLBAR_GAP};
 use crate::yt;
 
 pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
@@ -141,9 +141,9 @@ fn replay(app: &mut App) {
 
 /// Quick access to the local subscription list.
 ///
-/// The list can run to thousands of channels, so it is filtered rather than
-/// silently truncated: a filter box appears once the list is long enough to
-/// need one, and the row count always says how much is hidden.
+/// Every subscription is shown, virtualised so that costs nothing to have
+/// hundreds of them. The filter box is a convenience for long lists, not the
+/// only way to reach a channel.
 fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     let total = app.subscriptions.len();
 
@@ -157,11 +157,11 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(2.0);
     }
 
-    // Owned copies: the filter box above and the row clicks below both need
-    // `&mut App`, so the list cannot hold a borrow of the cache.
-    let matches = app.filtered_subscriptions();
+    // Indices, not cloned rows: the list is virtualised, so only the handful of
+    // rows on screen need their text, and the click handler needs `&mut App`.
+    let matches = app.filtered_subscription_indices();
+    let matching = matches.len();
     let filtering = !app.subs_filter.trim().is_empty();
-    let shown = matches.len().min(MAX_QUICK_ACCESS_ROWS);
 
     if total == 0 {
         egui::ScrollArea::vertical()
@@ -180,44 +180,61 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    egui::ScrollArea::vertical()
-        .max_height(240.0)
-        .id_salt("subs_scroll")
-        .show(ui, |ui| {
-            for (id, name) in matches.iter().take(MAX_QUICK_ACCESS_ROWS) {
-                let selected = app.section == Section::Feeds
-                    && app.feed == Feed::Channel
-                    && app.channel_id == *id;
-                let response = ui
-                    .selectable_label(selected, egui::RichText::new(name).size(12.5))
-                    .on_hover_text(format!("Open the feed of {name}"));
-                if response.clicked() {
-                    open_channel(app, id, name);
+    // Every subscription is listed - accounts run to well over 300 - so the rows
+    // are virtualised. The row height is the height a selectable row really
+    // takes, because `show_rows` derives the content height from it.
+    let row_height = ui.spacing().interact_size.y;
+    if matching == 0 {
+        ui.label(
+            egui::RichText::new("No channel matches that filter")
+                .size(12.0)
+                .color(muted()),
+        );
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("subs_scroll")
+            .max_height(240.0)
+            .show_rows(ui, row_height, matching, |ui, range| {
+                // egui draws the scrollbar over the right edge of the content
+                // instead of reserving room for it, so each row is sized to
+                // stop short of the bar. Sizing the row (rather than the scroll
+                // area) is what works: `max_width` narrows the box but the bar
+                // is drawn at the box's edge, so the text still ran underneath
+                // it. The height is the row height `show_rows` was told about,
+                // which keeps the scrollbar calibrated.
+                let width = (ui.available_width() - SCROLLBAR_GAP).max(60.0);
+                for index in range {
+                    let Some(slot) = matches.get(index).copied() else {
+                        continue;
+                    };
+                    let Some((id, name)) = app.subscriptions.get(slot) else {
+                        continue;
+                    };
+                    let selected = app.section == Section::Feeds
+                        && app.feed == Feed::Channel
+                        && app.channel_id == *id;
+                    // Clone just this row's text: the label owns it, and the
+                    // click below needs `&mut App` while the borrow is live.
+                    let (label, tooltip) = (name.clone(), format!("Open the feed of {name}"));
+                    let response = ui
+                        .add_sized(
+                            egui::vec2(width, row_height),
+                            egui::Button::selectable(selected, label),
+                        )
+                        .on_hover_text(tooltip);
+                    if response.clicked() {
+                        let (id, name) = app.subscriptions[slot].clone();
+                        open_channel(app, &id, &name);
+                    }
                 }
-            }
-            if matches.is_empty() {
-                ui.label(
-                    egui::RichText::new("No channel matches that filter")
-                        .size(12.0)
-                        .color(muted()),
-                );
-            } else if shown < matches.len() {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "showing {shown} of {} - narrow it with the filter",
-                        matches.len()
-                    ))
-                    .size(11.0)
-                    .color(muted()),
-                );
-            }
-        });
+            });
+    }
 
     ui.add_space(6.0);
     card(ui, |ui| {
         ui.label(
             egui::RichText::new(if filtering {
-                format!("{} matching of {total}", matches.len())
+                format!("{matching} matching of {total}")
             } else {
                 format!("{total} subscriptions")
             })
@@ -232,10 +249,6 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
 
 /// Number of channels above which the quick-access list gets a filter box.
 const FILTER_THRESHOLD: usize = 15;
-
-/// Rows drawn before the panel asks the user to filter. Rendering every channel
-/// of a 1000-subscription account every frame is not worth it.
-const MAX_QUICK_ACCESS_ROWS: usize = 200;
 
 fn open_channel(app: &mut App, id: &str, name: &str) {
     app.select(None);

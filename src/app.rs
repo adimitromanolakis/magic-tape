@@ -595,8 +595,12 @@ impl App {
 
     /// The subscription list is cached because the sidebar and the detail pane
     /// need it on every frame; re-reading the file per frame was pointless I/O.
+    /// Loads the subscription list and keeps it sorted by name, which is the
+    /// order quick access shows it in.
     pub fn reload_subscriptions(&mut self) {
         self.subscriptions = self.store.subscriptions();
+        self.subscriptions
+            .sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
         self.subscription_ids = self
             .subscriptions
             .iter()
@@ -608,20 +612,20 @@ impl App {
         !channel_id.is_empty() && self.subscription_ids.contains(channel_id)
     }
 
-    /// Subscriptions matching the quick-access filter, alphabetically.
+    /// Indices into `subscriptions` of the channels matching the quick-access
+    /// filter, in display order (the cache is already sorted by name).
     ///
-    /// Returns owned copies: the panel needs `&mut App` for clicks, so it cannot
-    /// hold borrows of the cache while it draws.
-    pub fn filtered_subscriptions(&self) -> Vec<(String, String)> {
+    /// Indices rather than clones: the quick-access list is virtualised, so it
+    /// only needs the names of the rows actually on screen, and the row click
+    /// handler needs `&mut App`.
+    pub fn filtered_subscription_indices(&self) -> Vec<usize> {
         let needle = self.subs_filter.trim().to_lowercase();
-        let mut matches: Vec<(String, String)> = self
-            .subscriptions
+        self.subscriptions
             .iter()
-            .filter(|(_, name)| needle.is_empty() || name.to_lowercase().contains(&needle))
-            .cloned()
-            .collect();
-        matches.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-        matches
+            .enumerate()
+            .filter(|(_, (_, name))| needle.is_empty() || name.to_lowercase().contains(&needle))
+            .map(|(index, _)| index)
+            .collect()
     }
 
     pub fn item_count(&self) -> usize {
@@ -1042,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn subscription_filter_matches_case_insensitively_and_sorts() {
+    fn subscription_filter_matches_case_insensitively() {
         let mut app = App::new(&egui::Context::default(), Startup::default());
         app.subscriptions = vec![
             ("UCa".to_string(), "Zebra channel".to_string()),
@@ -1050,24 +1054,74 @@ mod tests {
             ("UCc".to_string(), "Beta Talk".to_string()),
         ];
 
-        assert_eq!(app.filtered_subscriptions().len(), 3, "no filter shows all");
+        assert_eq!(
+            app.filtered_subscription_indices().len(),
+            3,
+            "no filter matches every channel"
+        );
 
         app.subs_filter = "channel".into();
-        let names: Vec<String> = app
-            .filtered_subscriptions()
+        let matched: Vec<&str> = app
+            .filtered_subscription_indices()
             .into_iter()
-            .map(|(_, name)| name)
+            .map(|i| app.subscriptions[i].1.as_str())
             .collect();
         assert_eq!(
-            names,
-            vec!["alpha CHANNEL".to_string(), "Zebra channel".to_string()],
-            "matches case-insensitively and sorts by name"
+            matched,
+            vec!["Zebra channel", "alpha CHANNEL"],
+            "matches case-insensitively"
         );
 
         app.subs_filter = "talK".into();
-        assert_eq!(app.filtered_subscriptions().len(), 1, "matches mid-word");
+        assert_eq!(
+            app.filtered_subscription_indices().len(),
+            1,
+            "matches mid-word"
+        );
         app.subs_filter = "zzz".into();
-        assert!(app.filtered_subscriptions().is_empty());
+        assert!(app.filtered_subscription_indices().is_empty());
+    }
+
+    #[test]
+    fn quick_access_lists_every_channel_not_a_capped_page() {
+        let app = app_with_subscriptions(640);
+        assert_eq!(
+            app.filtered_subscription_indices().len(),
+            app.subscriptions.len(),
+            "every subscription is reachable; there is no row cap"
+        );
+    }
+
+    #[test]
+    fn subscriptions_are_kept_in_display_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "mt-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("subscriptions.txt");
+        std::fs::write(&file, "UCb zebra\nUCa Alpha\nUCc beta\n").unwrap();
+        // `Paths::subscriptions()` derives the file from data_dir.
+        let paths = crate::config::Paths {
+            data_dir: dir.clone(),
+            ..crate::config::Paths::new()
+        };
+        let store = crate::store::Store::new(paths);
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.store = store;
+        app.reload_subscriptions();
+        let names: Vec<&str> = app
+            .subscriptions
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Alpha", "beta", "zebra"], "sorted by name");
+        assert!(app.is_subscribed("UCa"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
