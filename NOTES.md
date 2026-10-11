@@ -14,8 +14,8 @@ extractor and `mpv` the player; Rust replaces only the fzf/jq plumbing and adds 
 "improve" it by adding a YouTube API client or a Rust yt-dlp port — see §6.1 for why the shelling
 out is load-bearing.
 
-State at the time of writing: `v0.2.0`, 16 files (10 modules + 6 UI modules), 32 unit tests + 2
-opt-in network tests, zero clippy warnings. Tracked in git; tag `v0.2.0` marks the first working
+State at the time of writing: `v0.2.0`, 17 files, 45 unit tests + 3 opt-in network tests, zero
+clippy warnings. Tracked in git; tag `v0.2.0` marks the first working
 release.
 
 ## 2. Quick start
@@ -82,6 +82,7 @@ Rules that keep this sane:
 | `src/player.rs` | 293 | mpv invocation, log forwarding, exit-status watcher, notifications, `opener` |
 | `src/store.rs` | 366 | Watch history, liked, search history, last action, subscriptions, thumb paths |
 | `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
+| `src/font.rs` | 225 | Font discovery and installation, UI scale |
 | `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
 | `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
 | `src/ui/sidebar.rs` | 277 | Nav, feed list, subscription quick access, replay-previous-action |
@@ -122,6 +123,19 @@ Each yt-dlp call site passes a label to `run_output`/`run_output_in`: `list-feed
 `list-playlists`, `search-channels`, `import-subscriptions`, `video-metadata`, `download`,
 `version`, `update` — plus an `availability check` logged by `YtDlp::available()`. Add a label when
 adding a call.
+
+**Fonts** — `font.rs` discovers installed fonts once (`OnceLock`) and installs the chosen one
+*ahead of* egui's built-ins, never replacing them, so glyphs the chosen font lacks (CJK, emoji) fall
+back. UI size is a `Context::set_zoom_factor`, not a `TextStyle` edit, because the app paints some
+of its own text with explicit `FontId`s that a style change would miss. Both are applied from
+`MagicTape::apply_font_change` in `logic()`, which only reinstalls when the setting actually changed,
+the same trick as the theme.
+
+**Download paths** — a leading `/` means absolute, anything else (including `~/x`) is relative to
+`$HOME`. Do not normalise away the `~`: it is the only thing distinguishing the two. The setting used
+to be `$HOME + value`, so `/mnt` silently became `$HOME/mnt`; `config::resolve_download_dir` is the
+single place this is decided, and it is covered by tests including the migration of the old
+`/Downloads` default to `~/Downloads`.
 
 **Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
 frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
@@ -304,10 +318,12 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |
+| Font resolution | `resolves_by_name_and_by_path`, `accepts_a_path_that_exists`, `falls_back_to_a_prefix_match`, `display_name_drops_the_extension`, `zoom_is_clamped_to_something_usable` |
 | Subscription cache & quick-access filter | `subscription_lookup_uses_the_cache`, `subscription_filter_matches_case_insensitively_and_sorts` |
 | Comment metadata files | `video_stamp_is_per_video_and_path_safe`, `comment_files_are_pruned_to_the_cap` |
 | Store round-trips | `likes_are_idempotent`, `subscriptions_roundtrip`, `history_entries_roundtrip`, `search_history_is_deduped_and_reversed` |
-| Network / playback (opt-in) | `live_plays_page_url_through_mpv`, `live_lists_formats` |
+| Network / playback (opt-in) | `live_plays_page_url_through_mpv`, `live_lists_formats`, `live_downloads_into_an_absolute_directory` |
 
 When a YouTube response format changes, `cargo test` should fail via the fixtures *before* a user
 sees a broken list. If you regenerate them, keep the trimming and note the capture date in §6.1.

@@ -101,6 +101,7 @@ pub struct App {
     pub subscriptions: Vec<(String, String)>,
     pub subscription_ids: std::collections::HashSet<String>,
     pub subs_filter: String,
+    pub font_filter: String,
     pub visible_rows: usize,
     pub scroll_to_index: Option<usize>,
     pub pending_select: Option<usize>,
@@ -174,6 +175,7 @@ impl App {
             subscriptions: Vec::new(),
             subscription_ids: std::collections::HashSet::new(),
             subs_filter: String::new(),
+            font_filter: String::new(),
             visible_rows: 0,
             scroll_to_index: None,
             pending_select: None,
@@ -221,6 +223,12 @@ impl App {
                 version: ytdlp.version(),
             }
         });
+    }
+
+    /// Where downloads go, honouring absolute paths and `~`.
+    pub fn download_dir(&self) -> PathBuf {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        crate::config::resolve_download_dir(&self.config.download_directory, &home)
     }
 
     pub fn list_length(&self) -> usize {
@@ -442,7 +450,7 @@ impl App {
             video.url
         );
         let yt = self.yt.clone();
-        let directory = format!("{}{}", std::env::var("HOME").unwrap_or_default(), self.config.download_directory);
+        let directory = self.download_dir().to_string_lossy().into_owned();
         let title = video.title.clone();
         self.status = format!("Downloading \"{title}\"...");
         self.worker.spawn(
@@ -867,9 +875,9 @@ impl App {
                 self.status = "Download complete".into();
                 let kind = if audio_only { "audio" } else { "video" };
                 self.toast(format!("Downloaded {kind} for \"{title}\""), ToastKind::Success);
-                let directory = format!("{}{}", std::env::var("HOME").unwrap_or_default(), self.config.download_directory);
+                let directory = self.download_dir();
                 player::notify(&self.config, &format!("Download complete: {title}"));
-                let _ = player::open_directory(std::path::Path::new(&directory));
+                let _ = player::open_directory(&directory);
             }
             Outcome::YtDlpUpdated { version } => {
                 self.ytdlp_version = version;

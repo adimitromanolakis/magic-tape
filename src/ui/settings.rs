@@ -122,6 +122,10 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
     );
     ui.add_space(8.0);
 
+    ui.label("Appearance");
+    font_controls(app, ui);
+    ui.add_space(8.0);
+
     ui.label("Notifications");
     ui.checkbox(&mut app.config.notification_enabled, "Show desktop notifications");
     if app.config.notification_enabled {
@@ -131,6 +135,80 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
                 .text("Duration"),
         );
     }
+}
+
+/// UI font and scale.
+///
+/// The font is picked from the fonts installed on this machine; the chosen one
+/// is inserted ahead of egui's built-ins, so glyphs it lacks still render.
+fn font_controls(app: &mut App, ui: &mut egui::Ui) {
+    let fonts = crate::font::discovered();
+    let resolved = crate::font::resolve(&app.config.ui_font, fonts);
+
+    ui.horizontal(|ui| {
+        ui.label("Font");
+        let selected = if app.config.ui_font.trim().is_empty() {
+            "System default".to_string()
+        } else {
+            resolved
+                .as_deref()
+                .map(crate::font::display_name)
+                .unwrap_or_else(|| app.config.ui_font.clone())
+        };
+        egui::ComboBox::from_id_salt("ui_font")
+            .selected_text(selected)
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(app.config.ui_font.trim().is_empty(), "System default")
+                    .clicked()
+                {
+                    app.config.ui_font.clear();
+                }
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.font_filter)
+                        .hint_text("filter fonts...")
+                        .desired_width(220.0),
+                );
+                ui.separator();
+                let needle = app.font_filter.to_lowercase();
+                for path in fonts.iter().filter(|path| {
+                    needle.is_empty()
+                        || crate::font::display_name(path).to_lowercase().contains(&needle)
+                }) {
+                    let name = crate::font::display_name(path);
+                    if ui
+                        .selectable_label(app.config.ui_font == path.to_string_lossy(), name)
+                        .on_hover_text(path.to_string_lossy())
+                        .clicked()
+                    {
+                        app.config.ui_font = path.to_string_lossy().into_owned();
+                    }
+                }
+            });
+        ui.label(
+            egui::RichText::new(format!("{} installed", crate::font::discovered().len()))
+                .size(11.0)
+                .color(muted()),
+        );
+    });
+    if !app.config.ui_font.trim().is_empty() && resolved.is_none() {
+        ui.colored_label(
+            egui::Color32::from_rgb(0xE0, 0x50, 0x50),
+            format!("No installed font matches \"{}\"", app.config.ui_font),
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Size");
+        ui.add(
+            egui::Slider::new(&mut app.config.ui_zoom, 0.7..=2.0)
+                .text("scale")
+                .clamping(egui::SliderClamping::Always),
+        );
+        if ui.button("Reset").clicked() {
+            app.config.ui_zoom = 1.0;
+        }
+    });
 }
 
 fn playback(app: &mut App, ui: &mut egui::Ui) {
@@ -183,14 +261,30 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Folder");
         ui.add(
             egui::TextEdit::singleline(&mut app.config.download_directory)
-                .desired_width(160.0),
-        );
-        ui.label(
-            egui::RichText::new("relative to your home directory")
-                .size(11.0)
-                .color(muted()),
+                .desired_width(220.0)
+                .hint_text("/Downloads, /tmp/youtube, ~/Videos"),
         );
     });
+    let resolved = app.download_dir();
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!("Downloads go to {}", resolved.display()))
+                .size(11.0)
+                .color(muted()),
+        )
+        .wrap(),
+    );
+    if !resolved.exists() {
+        ui.colored_label(
+            egui::Color32::from_rgb(0xE0, 0xB0, 0x40),
+            "That folder does not exist yet - it will be created on the first download.",
+        );
+    }
+    for suggestion in ["/tmp/magic-tape", "/mnt", "/tmp"] {
+        if ui.small_button(format!("use {suggestion}")).clicked() {
+            app.config.download_directory = suggestion.to_string();
+        }
+    }
     ui.checkbox(&mut app.config.show_mpv_keybindings, "Show mpv keybindings in the help panel");
     ui.add_space(8.0);
 

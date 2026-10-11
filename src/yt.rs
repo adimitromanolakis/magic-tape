@@ -460,6 +460,10 @@ mod tests {
 mod live {
     use super::*;
 
+    fn home() -> std::path::PathBuf {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
+    }
+
     fn init_logging() {
         let _ = env_logger::Builder::from_env(
             env_logger::Env::default().default_filter_or("info"),
@@ -496,6 +500,36 @@ mod live {
             std::thread::sleep(std::time::Duration::from_secs(8));
         }
         println!("done - check the [mpv] log lines for VO/AO and errors");
+    }
+
+    /// Opt-in end-to-end check that a download honours an absolute directory
+    /// such as `/tmp` or `/mnt` instead of nesting it under `$HOME`.
+    #[test]
+    #[ignore = "requires network access and yt-dlp"]
+    fn live_downloads_into_an_absolute_directory() {
+        init_logging();
+        let config = test_config();
+        let yt = YtDlp::new(&config);
+        let target = std::path::Path::new("/tmp/magic-tape-download-test");
+        std::fs::remove_dir_all(target).ok();
+        let resolved = crate::config::resolve_download_dir("/tmp/magic-tape-download-test", &home());
+        assert_eq!(resolved, target, "an absolute path must be kept as it is");
+
+        yt.download(
+            "https://www.youtube.com/watch?v=5C_HPTJg5ek",
+            &resolved,
+            false,
+        )
+        .expect("the download should succeed");
+
+        let files: Vec<_> = std::fs::read_dir(target)
+            .expect("the download directory should have been created")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!files.is_empty(), "yt-dlp should have written a file");
+        println!("downloaded into {}: {files:?}", target.display());
+        std::fs::remove_dir_all(target).ok();
     }
 
     /// Opt-in check that mpv can list the formats for a real video.

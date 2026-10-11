@@ -25,6 +25,29 @@ cargo build --release
 ./target/release/magic-tape
 ```
 
+## Fonts and scale
+
+Settings → General → Appearance. The font list is built from the fonts installed on the machine
+(378 on the development box), searchable inside the dropdown. The chosen file is inserted *ahead*
+of egui's built-ins rather than replacing them, so a font without CJK or emoji glyphs still shows
+those characters through the fallbacks. The size slider scales the whole interface, including the
+text the app paints itself.
+
+## Downloads
+
+The download folder accepts absolute paths, which is what you want for a separate disk or a
+scratch volume:
+
+```
+/mnt/data/youtube    absolute, used as it is
+/tmp                 absolute
+~/Videos             your home directory
+Videos               your home directory (the default is ~/Downloads)
+```
+
+A folder that does not exist yet is created on the first download; the Settings window shows the
+resolved path and warns when it is missing.
+
 ## Usage
 
 ```sh
@@ -103,13 +126,15 @@ values are imported once as defaults.
 | --- | --- |
 | `cookies_from_browser` | browser passed to `yt-dlp --cookies-from-browser` (`""` disables) |
 | `list_length` | videos per page (1-99) |
-| `download_directory` | relative to `$HOME` |
+| `download_directory` | a leading `/` means absolute (`/tmp`, `/mnt/data`); anything else, `~/Videos` included, is relative to `$HOME` |
 | `download_video_quality` | yt-dlp format selector used by the **Best** button |
 | `show_comments`, `comments_max`, `comment_replies_max` | comment loading |
 | `comments_sort` | `new`, `top`, `old` |
 | `pinned_comments` | `first` or `last` |
 | `list_view` | `grid` or `list` |
 | `theme` | `dark`, `light`, `system` |
+| `ui_font` | path or name of an installed font; empty keeps egui's built-in font |
+| `ui_zoom` | UI scale, 0.7 - 2.0 |
 | `mpv_binary`, `ytdlp_binary` | override the executables |
 
 ### State on disk

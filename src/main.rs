@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod font;
 mod model;
 mod player;
 mod store;
@@ -39,6 +40,8 @@ struct MagicTape {
     /// applied when this changes, so it runs once per switch rather than once
     /// per frame.
     applied: Option<Theme>,
+    /// The font and scale the context is currently using, for the same reason.
+    applied_font: Option<(String, f32)>,
 }
 
 fn parse_args() -> Startup {
@@ -70,10 +73,12 @@ impl MagicTape {
     fn new(cc: &eframe::CreationContext<'_>, startup: Startup) -> Self {
         let mut app = App::new(&cc.egui_ctx, startup);
         app.list_view = app.config.list_view;
+        let applied_font = Some((app.config.ui_font.clone(), app.config.ui_zoom));
         Self {
             app,
             booted: false,
             applied: None,
+            applied_font,
         }
     }
 }
@@ -91,6 +96,34 @@ fn visuals_for(theme: Theme) -> egui::Visuals {
     visuals
 }
 
+impl MagicTape {
+    /// Reinstalls the UI font when the setting changes, and complains once if
+    /// the chosen font cannot be read.
+    fn apply_font_change(&mut self, ctx: &egui::Context) {
+        let wanted = (self.app.config.ui_font.clone(), self.app.config.ui_zoom);
+        if self.applied_font.as_ref() == Some(&wanted) {
+            return;
+        }
+        let path = font::resolve(&wanted.0, font::discovered());
+        if wanted.0.trim().is_empty() != path.is_none() {
+            log::warn!(
+                "[font] {:?} could not be matched to an installed font",
+                wanted.0
+            );
+            self.app.toast(
+                format!("No installed font matches \"{}\"", wanted.0),
+                crate::app::ToastKind::Error,
+            );
+        }
+        if let Err(error) = font::apply(ctx, path.as_deref(), wanted.1) {
+            log::error!("[font] could not be applied: {error}");
+            self.app
+                .toast(format!("Font not applied: {error}"), crate::app::ToastKind::Error);
+        }
+        self.applied_font = Some(wanted);
+    }
+}
+
 impl eframe::App for MagicTape {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for outcome in self.app.worker.drain() {
@@ -101,6 +134,7 @@ impl eframe::App for MagicTape {
             self.booted = true;
             self.app.boot();
         }
+        self.apply_font_change(ctx);
         if self.app.worker.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }

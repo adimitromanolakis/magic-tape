@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -65,6 +65,8 @@ pub struct Config {
     pub colored_messages: bool,
     pub list_view: ListView,
     pub theme: Theme,
+    pub ui_font: String,
+    pub ui_zoom: f32,
     pub play_in_fullscreen: bool,
     pub window_width: f32,
     pub window_height: f32,
@@ -79,7 +81,7 @@ impl Default for Config {
         Self {
             cookies_from_browser: "firefox".into(),
             list_length: 20,
-            download_directory: "/Downloads".into(),
+            download_directory: "~/Downloads".into(),
             download_video_quality: "bv*+ba/b".into(),
             show_comments: true,
             comments_max: 20,
@@ -92,6 +94,8 @@ impl Default for Config {
             colored_messages: true,
             list_view: ListView::Grid,
             theme: Theme::Dark,
+            ui_font: String::new(),
+            ui_zoom: 1.0,
             play_in_fullscreen: true,
             window_width: 1360.0,
             window_height: 860.0,
@@ -133,12 +137,13 @@ impl Config {
         self.list_length = self.list_length.clamp(1, 99);
         self.comments_max = self.comments_max.clamp(1, 500);
         self.comment_replies_max = self.comment_replies_max.clamp(0, 100);
-        if !self.download_directory.starts_with('/') {
-            self.download_directory.insert(0, '/');
+        self.download_directory = normalise_directory(&self.download_directory);
+        if self.download_directory == "/Downloads" {
+            // The shell script stored this as "$HOME/Downloads"; the leading
+            // slash used to mean "under my home", now it means absolute.
+            self.download_directory = "~/Downloads".into();
         }
-        while self.download_directory.ends_with('/') && self.download_directory.len() > 1 {
-            self.download_directory.pop();
-        }
+        self.ui_zoom = self.ui_zoom.clamp(0.7, 2.0);
         if self.window_width < 640.0 {
             self.window_width = 640.0;
         }
@@ -166,7 +171,10 @@ impl Config {
                     }
                 }
                 "PREF_BROWSER" => self.cookies_from_browser = value.to_string(),
-                "DOWNLOAD_DIRECTORY" => self.download_directory = value.to_string(),
+                // The old config always meant $HOME + value.
+                "DOWNLOAD_DIRECTORY" => {
+                    self.download_directory = format!("~{}", value)
+                }
                 "COMMENTS_MAX" => {
                     if let Ok(v) = value.parse() {
                         self.comments_max = v;
@@ -199,6 +207,7 @@ impl Config {
                     }
                 }
                 "COLORED_MESSAGES" => self.colored_messages = value == "yes",
+                "UI_FONT" => self.ui_font = value.to_string(),
                 "IMAGE_SUPPORT" => {
                     if value == "none" {
                         self.list_view = ListView::List;
@@ -300,6 +309,44 @@ impl Paths {
     }
 }
 
+/// Tidies a download directory setting: surrounding spaces and trailing
+/// slashes. `~` is deliberately *kept*, because it is what distinguishes
+/// "relative to my home" from "absolute" - stripping it would turn `~/Videos`
+/// into the absolute path `/Videos`.
+fn normalise_directory(setting: &str) -> String {
+    let trimmed = setting.trim();
+    let mut out = trimmed.to_string();
+    while out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "~/Downloads".to_string()
+    } else {
+        out
+    }
+}
+
+/// Resolves the download directory setting to a real path.
+///
+/// A leading `/` means an absolute path (`/tmp`, `/mnt/data`), anything else -
+/// including a bare `Downloads` and `~/Videos` - is resolved against the home
+/// directory.
+pub fn resolve_download_dir(setting: &str, home: &Path) -> PathBuf {
+    let cleaned = normalise_directory(setting);
+    if cleaned == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = cleaned.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    let path = Path::new(&cleaned);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        home.join(path)
+    }
+}
+
 fn chrono_today() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -321,4 +368,84 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> &'static Path {
+        Path::new("/home/tester")
+    }
+
+    #[test]
+    fn absolute_paths_are_used_as_they_are() {
+        for path in ["/tmp", "/mnt", "/mnt/data/youtube", "/tmp/a b/c"] {
+            assert_eq!(
+                resolve_download_dir(path, home()),
+                PathBuf::from(path),
+                "an absolute path must not be put under $HOME"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_and_home_paths_resolve_against_home() {
+        assert_eq!(
+            resolve_download_dir("Downloads", home()),
+            PathBuf::from("/home/tester/Downloads")
+        );
+        assert_eq!(
+            resolve_download_dir("~/Videos", home()),
+            PathBuf::from("/home/tester/Videos")
+        );
+        assert_eq!(
+            resolve_download_dir("~/", home()),
+            PathBuf::from("/home/tester"),
+            "a bare ~ is the home directory itself"
+        );
+    }
+
+    #[test]
+    fn the_old_style_default_is_migrated() {
+        // A config written by the shell script, or by the first Rust build.
+        let mut config = Config {
+            download_directory: "/Downloads".into(),
+            ..Default::default()
+        };
+        config.clamp();
+        assert_eq!(config.download_directory, "~/Downloads");
+        assert_eq!(
+            resolve_download_dir(&config.download_directory, home()),
+            PathBuf::from("/home/tester/Downloads")
+        );
+    }
+
+    #[test]
+    fn trailing_slashes_and_blanks_are_tidied() {
+        assert_eq!(resolve_download_dir("/tmp/", home()), PathBuf::from("/tmp"));
+        assert_eq!(
+            resolve_download_dir("  /mnt/data/  ", home()),
+            PathBuf::from("/mnt/data")
+        );
+        assert_eq!(
+            resolve_download_dir("", home()),
+            PathBuf::from("/home/tester/Downloads"),
+            "an empty setting falls back to the default"
+        );
+        assert_eq!(
+            resolve_download_dir("   ", home()),
+            PathBuf::from("/home/tester/Downloads")
+        );
+    }
+
+    #[test]
+    fn the_default_is_the_home_downloads_folder() {
+        let config = Config::default();
+        assert_eq!(config.download_directory, "~/Downloads");
+        assert_eq!(
+            resolve_download_dir(&config.download_directory, home()),
+            PathBuf::from("/home/tester/Downloads")
+        );
+    }
 }
