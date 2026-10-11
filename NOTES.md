@@ -131,6 +131,15 @@ of its own text with explicit `FontId`s that a style change would miss. Both are
 `MagicTape::apply_font_change` in `logic()`, which only reinstalls when the setting actually changed,
 the same trick as the theme.
 
+**The query belongs to the search feed** — `App::query` used to be a free-floating
+string that every request read. `yt::list_feed` matched `(Some(q), _)`, so once a term was
+stored *every* feed - channels, trending, subscriptions - asked yt-dlp for
+`/results?search_query=...`: one search permanently hijacked navigation. Two functions now own
+that decision: `app::search_query_for`, which only answers for `Feed::Search`, and
+`yt::feed_path`, which only searches when the feed *is* the search feed. Neither is clever enough
+to be obvious, hence both are tested. `App::feed_before_search` and `leave_search` give the user
+an explicit way back, and the search box stays on screen instead of being swapped for the term.
+
 **Download paths** — a leading `/` means absolute, anything else (including `~/x`) is relative to
 `$HOME`. Do not normalise away the `~`: it is the only thing distinguishing the two. The setting used
 to be `$HOME + value`, so `/mnt` silently became `$HOME/mnt`; `config::resolve_download_dir` is the
@@ -318,6 +327,7 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |
 | Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |
 | Font resolution | `resolves_by_name_and_by_path`, `accepts_a_path_that_exists`, `falls_back_to_a_prefix_match`, `display_name_drops_the_extension`, `zoom_is_clamped_to_something_usable` |
 | Subscription cache & quick-access filter | `subscription_lookup_uses_the_cache`, `subscription_filter_matches_case_insensitively_and_sorts` |

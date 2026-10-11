@@ -75,6 +75,8 @@ pub struct App {
     pub section: Section,
     pub feed: Feed,
     pub query: String,
+    /// The feed to come back to when the search results are dismissed.
+    pub feed_before_search: Feed,
     pub filter: DurationFilter,
     pub channel_id: String,
     pub channel_name: String,
@@ -149,6 +151,7 @@ impl App {
             thumbs: ThumbCache::new(ctx),
             section: Section::Feeds,
             feed: startup.feed.unwrap_or(Feed::Subscriptions),
+            feed_before_search: Feed::Subscriptions,
             query: startup.query.clone().unwrap_or_default(),
             search_input: startup.query.unwrap_or_default(),
             filter: DurationFilter::Any,
@@ -195,6 +198,12 @@ impl App {
         );
         self.reload_subscriptions();
         if !self.query.trim().is_empty() {
+            // `magic-tape --search rust` starts in the search results: remember
+            // the feed the user asked for so "Back" can return to it.
+            if self.feed != Feed::Search {
+                self.feed_before_search = self.feed;
+            }
+            self.feed = Feed::Search;
             let query = self.query.clone();
             self.start_search(&query);
         } else if !self.yt.available() {
@@ -255,10 +264,8 @@ impl App {
     pub fn load_feed(&mut self, feed: Feed, start: usize) {
         let yt = self.yt.clone();
         let filter = self.filter;
-        let query: Option<String> = match self.query.trim() {
-            "" => None,
-            trimmed => Some(trimmed.to_string()),
-        };
+        let query: Option<String> = search_query_for(feed, &self.query)
+            .map(str::to_string);
         let channel = self.channel_id.clone();
         let count = self.list_length();
         self.feed_state.loading = true;
@@ -557,16 +564,53 @@ impl App {
     }
 
     pub fn start_search(&mut self, term: &str) {
-        let term = term.trim();
-        if term.is_empty() {
+        let term = term.trim().to_string();
+        if !self.begin_search(&term) {
             return;
         }
-        let _ = self.store.push_search_history(term);
+        let _ = self.store.push_search_history(&term);
+        self.load_feed(Feed::Search, 0);
+    }
+
+    /// Starts a search without doing any I/O, so the transition can be tested
+    /// without yt-dlp. Returns false when there is nothing to search for.
+    fn begin_search(&mut self, term: &str) -> bool {
+        let term = term.trim();
+        if term.is_empty() {
+            return false;
+        }
         self.section = Section::Feeds;
+        if self.feed != Feed::Search {
+            self.feed_before_search = self.feed;
+        }
         self.feed = Feed::Search;
         self.query = term.to_string();
         self.filter = DurationFilter::Any;
-        self.load_feed(Feed::Search, 0);
+        true
+    }
+
+    /// Leaves the search results and returns to the feed that was open before.
+    ///
+    /// The query is cleared as well: leaving it behind used to poison every
+    /// later request, because a non-empty query made yt-dlp build a search URL
+    /// for *every* feed.
+    pub fn leave_search(&mut self) {
+        if let Some(feed) = self.end_search() {
+            self.load_feed(feed, 0);
+        }
+    }
+
+    /// The `leave_search` state change, without the reload. Returns the feed
+    /// that now needs loading, if any.
+    fn end_search(&mut self) -> Option<Feed> {
+        if self.feed != Feed::Search {
+            self.query.clear();
+            return None;
+        }
+        self.query.clear();
+        self.filter = DurationFilter::Any;
+        self.feed = self.feed_before_search;
+        Some(self.feed)
     }
 
     /// How far PageUp/PageDown move: one screenful, minus a row of overlap.
@@ -932,6 +976,22 @@ fn feed_label(feed: Feed) -> &'static str {
     }
 }
 
+/// The search term to send with a feed request, if any.
+///
+/// Only the search feed carries a term. This is the single place that decides
+/// it, and it is deliberately not "any feed while a query is stored": a stored
+/// query turned every later request into a search, which is why clicking a
+/// channel after searching used to keep showing the same results.
+pub fn search_query_for(feed: Feed, query: &str) -> Option<&str> {
+    if feed != Feed::Search {
+        return None;
+    }
+    match query.trim() {
+        "" => None,
+        trimmed => Some(trimmed),
+    }
+}
+
 pub fn entry_to_video(entry: &crate::store::HistoryEntry) -> Video {
     let id = entry.video_id().to_string();
     Video {
@@ -1130,6 +1190,80 @@ mod tests {
         assert_eq!(names, vec!["Alpha", "beta", "zebra"], "sorted by name");
         assert!(app.is_subscribed("UCa"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_search_feed_carries_the_query() {
+        // The bug: a stored query turned every later request into a search, so
+        // clicking a channel or Trending kept showing the same results.
+        assert_eq!(search_query_for(Feed::Search, "rust"), Some("rust"));
+        assert_eq!(search_query_for(Feed::Search, "  rust  "), Some("rust"));
+        assert_eq!(search_query_for(Feed::Search, "   "), None);
+        for feed in [
+            Feed::Subscriptions,
+            Feed::Trending,
+            Feed::Recommended,
+            Feed::Channel,
+            Feed::Repeat,
+        ] {
+            assert_eq!(
+                search_query_for(feed, "rust"),
+                None,
+                "{feed:?} must not be searched"
+            );
+        }
+    }
+
+    #[test]
+    fn a_leftover_query_cannot_poison_another_feed() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        assert!(app.begin_search("rust"));
+        assert_eq!(app.feed, Feed::Search);
+        assert_eq!(app.feed_before_search, Feed::Subscriptions);
+        assert_eq!(search_query_for(app.feed, &app.query), Some("rust"));
+
+        // Opening a channel after a search asks for the channel, not the term,
+        // however the search was left behind.
+        app.feed = Feed::Channel;
+        assert_eq!(search_query_for(app.feed, &app.query), None);
+    }
+
+    #[test]
+    fn leaving_a_search_returns_to_the_previous_feed() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.feed = Feed::Trending;
+        assert!(app.begin_search("rust"));
+        assert_eq!(app.feed_before_search, Feed::Trending);
+        assert_eq!(app.end_search(), Some(Feed::Trending));
+        assert_eq!(app.feed, Feed::Trending);
+        assert_eq!(app.query, "", "the term must not outlive the search");
+    }
+
+    #[test]
+    fn a_search_inside_a_search_keeps_the_original_return_feed() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.begin_search("rust");
+        app.begin_search("zig");
+        assert_eq!(app.feed_before_search, Feed::Subscriptions);
+        assert_eq!(app.query, "zig", "the newer term wins");
+    }
+
+    #[test]
+    fn an_empty_term_starts_nothing() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        assert!(!app.begin_search("   "));
+        assert_eq!(app.feed, Feed::Subscriptions);
+        assert_eq!(app.query, "");
+    }
+
+    #[test]
+    fn leaving_a_search_from_another_feed_only_clears_the_term() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.feed = Feed::Trending;
+        app.query = "rust".into();
+        assert_eq!(app.end_search(), None, "no search to leave, no feed to load");
+        assert_eq!(app.feed, Feed::Trending, "the feed stays put");
+        assert_eq!(app.query, "");
     }
 
     #[test]

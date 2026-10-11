@@ -95,7 +95,23 @@ fn feed_controls(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     ui.separator();
-    if !app.query.is_empty() {
+    // The search box stays available everywhere. It used to be swapped for the
+    // term and the duration filters as soon as a query existed, which left no
+    // way to start another search.
+    ui.add(
+        egui::TextEdit::singleline(&mut app.search_input)
+            .hint_text("Search YouTube...")
+            .desired_width(220.0),
+    );
+    if ui.button("Search").clicked() {
+        start_search(app);
+    }
+    if ui.button("History").on_hover_text("Search history").clicked()
+        && let Some(term) = app.store.search_history().first().cloned()
+    {
+        app.search_input = term;
+    }
+    if app.feed == Feed::Search {
         ui.label(
             egui::RichText::new(format!("\"{}\"", app.query))
                 .size(12.0)
@@ -116,19 +132,13 @@ fn feed_controls(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.add_space(4.0);
         }
-    } else {
-        ui.add(
-            egui::TextEdit::singleline(&mut app.search_input)
-                .hint_text("Search YouTube...")
-                .desired_width(220.0),
-        );
-        if ui.button("Search").clicked() {
-            start_search(app);
+        if ui
+            .button("← Back")
+            .on_hover_text("Leave the search results and return to the previous feed")
+            .clicked()
+        {
+            app.leave_search();
         }
-        if ui.button("History").on_hover_text("Search history").clicked()
-            && let Some(term) = app.store.search_history().first().cloned() {
-                app.search_input = term;
-            }
     }
     ui.separator();
     if ui

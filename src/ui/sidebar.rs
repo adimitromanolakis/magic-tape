@@ -130,11 +130,15 @@ fn replay(app: &mut App) {
             app.feed = Feed::Channel;
             app.channel_id = action.channel.clone();
         }
+        "search" => app.feed = Feed::Search,
         "repeat" | "subscriptions" => app.feed = Feed::Subscriptions,
         _ => app.feed = Feed::Subscriptions,
     }
-    if !action.query.is_empty() && app.feed == Feed::Subscriptions {
+    // Only the search feed carries a term, so only it has to drop the filter.
+    if !action.query.is_empty() && app.feed == Feed::Search {
         app.filter = DurationFilter::Any;
+    } else if app.feed != Feed::Search {
+        app.query.clear();
     }
     app.load_feed(app.feed, action.start);
 }

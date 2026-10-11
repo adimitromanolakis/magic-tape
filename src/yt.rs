@@ -76,14 +76,7 @@ impl YtDlp {
     ) -> Result<Listing> {
         let first = start + 1;
         let last = start + count;
-        let path = match (query, feed) {
-            (Some(q), _) => format!(
-                "/results?search_query={}{}",
-                urlencode(q),
-                filter.query_value()
-            ),
-            (None, feed) => feed.path(channel),
-        };
+        let path = feed_path(feed, channel, query, filter);
         let mut args: Vec<String> = vec!["--flat-playlist".into()];
         if feed.request_needs_extractor_args() && query.is_none() {
             args.push("--extractor-args".into());
@@ -345,6 +338,27 @@ fn video_stamp(url: &str) -> String {
     }
 }
 
+/// The YouTube path a feed request asks for.
+///
+/// A term turns the request into a search - but only for the search feed. The
+/// obvious, wrong version of this match is `(Some(q), _) =>`, which sent *any*
+/// feed to `/results` whenever a query happened to be stored.
+pub fn feed_path(
+    feed: Feed,
+    channel: &str,
+    query: Option<&str>,
+    filter: DurationFilter,
+) -> String {
+    match (query, feed) {
+        (Some(q), Feed::Search) => format!(
+            "/results?search_query={}{}",
+            urlencode(q),
+            filter.query_value()
+        ),
+        (_, feed) => feed.path(channel),
+    }
+}
+
 pub fn urlencode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.as_bytes() {
@@ -456,6 +470,92 @@ mod tests {
         assert_eq!(urldecode("a+b"), "a b");
     }
 }
+    #[test]
+    fn a_term_only_searches_the_search_feed() {
+        // The regression this guards: `(Some(q), _)` in the match meant that
+        // clicking a channel after searching kept returning search results.
+        for (feed, channel, expected) in [
+            (Feed::Subscriptions, "", "/feed/subscriptions"),
+            (Feed::Trending, "", "/feed/trending"),
+            (Feed::Channel, "UC123", "/channel/UC123/videos"),
+            (Feed::Channel, "@handle", "/@handle/videos"),
+        ] {
+            assert_eq!(
+                feed_path(feed, channel, Some("rust"), DurationFilter::Any),
+                expected,
+                "{feed:?} must not be hijacked by a leftover term"
+            );
+        }
+        assert_eq!(
+            feed_path(Feed::Search, "", Some("rust lang"), DurationFilter::Any),
+            format!(
+            "/results?search_query=rust%20lang{}",
+            DurationFilter::Any.query_value()
+        )
+        );
+        assert_eq!(
+            feed_path(Feed::Search, "", Some("rust"), DurationFilter::Long),
+            format!("/results?search_query=rust{}", DurationFilter::Long.query_value())
+        );
+    }
+
+    #[test]
+    fn a_stored_term_never_reaches_ytdlp_for_another_feed() {
+        // Drives the real subprocess plumbing with a stand-in for yt-dlp that
+        // records the URL it was asked for, so the regression is caught even if
+        // somebody reorders the arguments above.
+        let dir = std::env::temp_dir().join("magic-tape-fake-ytdlp");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("requested.txt");
+        let script = dir.join("fake-yt-dlp");
+        // A stand-in that appends the URL it was handed to a file.
+        let body = "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    https://*) echo \"$a\" >> __RECORD__ ;;\n  esac\ndone\necho '{}'\n";
+        std::fs::write(&script, body.replace("__RECORD__", &record.display().to_string())).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let mut config = test_config();
+        config.ytdlp_binary = script.display().to_string();
+        let yt = YtDlp::new(&config);
+
+        yt.list_feed(Feed::Search, "", Some("rust"), DurationFilter::Any, 0, 5)
+            .unwrap();
+        yt.list_feed(Feed::Channel, "UC123", Some("rust"), DurationFilter::Any, 0, 5)
+            .unwrap();
+        yt.list_feed(Feed::Trending, "", Some("rust"), DurationFilter::Any, 0, 5)
+            .unwrap();
+        yt.list_feed(Feed::Channel, "UC123", None, DurationFilter::Any, 0, 5)
+            .unwrap();
+
+        let asked = std::fs::read_to_string(&record).unwrap();
+        let urls: Vec<&str> = asked.lines().collect();
+        assert_eq!(urls.len(), 4, "one request per call: {asked}");
+        assert_eq!(
+            urls[0],
+            format!(
+                "https://www.youtube.com/results?search_query=rust{}",
+                DurationFilter::Any.query_value()
+            )
+        );
+        assert_eq!(urls[1], "https://www.youtube.com/channel/UC123/videos");
+        assert_eq!(urls[2], "https://www.youtube.com/feed/trending");
+        assert_eq!(urls[3], "https://www.youtube.com/channel/UC123/videos");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+#[cfg(test)]
+fn test_config() -> Config {
+    Config {
+        cookies_from_browser: String::new(),
+        notification_enabled: false,
+        mpv_log_level: std::env::var("MT_MPV_LOG").unwrap_or_else(|_| "all=warn".into()),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod live {
     use super::*;
@@ -470,15 +570,6 @@ mod live {
         )
         .is_test(false)
         .try_init();
-    }
-
-    fn test_config() -> Config {
-        Config {
-            cookies_from_browser: String::new(),
-            notification_enabled: false,
-            mpv_log_level: std::env::var("MT_MPV_LOG").unwrap_or_else(|_| "all=warn".into()),
-            ..Default::default()
-        }
     }
 
     /// Opt-in end-to-end playback check: hands the page URL to the same
