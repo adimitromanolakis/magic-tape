@@ -75,7 +75,9 @@ fn nav(app: &mut App, ui: &mut egui::Ui, label: &str, section: Section) {
                 app.channel_results = channels
                     .into_iter()
                     .map(|(id, name)| crate::model::Channel {
-                        thumbnail: Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg")),
+                        // No avatar URL to hand over; the Channels page fetches
+                        // one from the channel page instead of guessing.
+                        thumbnail: None,
                         id,
                         name,
                         subscribers: None,

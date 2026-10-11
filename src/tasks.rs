@@ -140,6 +140,39 @@ pub fn download_thumbnail(url: &str, dest: PathBuf) -> Result<()> {
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no thumbnail candidate for {url}")))
 }
 
+/// Reads a channel's avatar out of its page.
+///
+/// Channel pictures are not on `i.ytimg`, and the subscriptions file keeps
+/// only an id, so when a channel has no avatar URL of its own the page is the
+/// one place that still publishes it. The result is cached as an image file, so
+/// this runs once per channel rather than once per visit.
+pub fn download_channel_avatar(id: &str, dest: PathBuf) -> Result<()> {
+    if dest.exists() {
+        return Ok(());
+    }
+    let page = fetch_text(&format!("https://www.youtube.com/channel/{id}"))?;
+    let url = og_image(&page).ok_or_else(|| anyhow::anyhow!("no avatar published for {id}"))?;
+    let bytes = fetch_thumbnail(&url)?;
+    write_thumbnail(dest, bytes)
+}
+
+/// The `og:image` of a channel page.
+pub fn og_image(html: &str) -> Option<String> {
+    let marker = r#"<meta property="og:image" content=""#;
+    let start = html.find(marker)? + marker.len();
+    let rest = &html[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn fetch_text(url: &str) -> Result<String> {
+    Ok(thumbnail_client()?
+        .get(url)
+        .send()?
+        .error_for_status()?
+        .text()?)
+}
+
 fn fetch_thumbnail(url: &str) -> Result<Vec<u8>> {
     Ok(thumbnail_client()?
         .get(url)
@@ -157,4 +190,25 @@ fn write_thumbnail(dest: PathBuf, bytes: Vec<u8>) -> Result<()> {
     std::fs::write(&tmp, &bytes)?;
     std::fs::rename(&tmp, &dest)?;
     Ok(())
+}
+#[cfg(test)]
+mod avatar_tests {
+    use super::og_image;
+
+    #[test]
+    fn reads_the_avatar_out_of_a_channel_page() {
+        let html = r#"<head><meta property="og:title" content="3Blue1Brown">
+            <meta property="og:image" content="https://yt3.googleusercontent.com/ytc/AIdro_nFz=s900-c-k-c0x00ffffff-no-rj">
+            <meta property="og:url" content="https://www.youtube.com/channel/UC1"></head>"#;
+        assert_eq!(
+            og_image(html).as_deref(),
+            Some("https://yt3.googleusercontent.com/ytc/AIdro_nFz=s900-c-k-c0x00ffffff-no-rj")
+        );
+    }
+
+    #[test]
+    fn a_page_without_one_is_none() {
+        assert_eq!(og_image("<html><body>nothing here</body></html>"), None);
+        assert_eq!(og_image(""), None);
+    }
 }

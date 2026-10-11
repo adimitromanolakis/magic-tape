@@ -545,10 +545,6 @@ impl App {
         }
     }
 
-    pub fn current_channel(&self) -> Option<Channel> {
-        self.channel_results.get(self.selected?).cloned()
-    }
-
     pub fn select(&mut self, index: Option<usize>) {
         if index != self.selected {
             self.scroll_to_index = index;
@@ -765,9 +761,34 @@ impl App {
     }
 
     pub fn ensure_channel_thumbnail(&mut self, channel: &Channel) {
-        if let Some(url) = channel.thumbnail.clone().filter(|u| !u.is_empty()) {
-            self.ensure_image(&channel.id, url);
+        match crate::thumbs::channel_avatar_url(channel.thumbnail.clone()) {
+            Some(url) => self.ensure_image(&channel.id, url),
+            // No picture of its own: ask the channel page for one.
+            None => self.ensure_avatar(&channel.id),
         }
+    }
+
+    fn ensure_avatar(&mut self, id: &str) {
+        let id = id.to_string();
+        if !self.thumbs.request_pending(&id) {
+            return;
+        }
+        if let Some(existing) = self.cached_thumb_path(&id) {
+            self.thumbs.insert(&self.ctx, &id, existing);
+            return;
+        }
+        self.thumbs.mark_pending(&id, format!("channel:{id}"));
+        let dest = self.store.thumb_path(&id);
+        self.worker.spawn(
+            "fetch channel avatar",
+            move || match crate::tasks::download_channel_avatar(&id, dest.clone()) {
+                Ok(()) => Outcome::ThumbnailReady { id, path: dest },
+                Err(error) => Outcome::ThumbnailMissing {
+                    id,
+                    error: error.to_string(),
+                },
+            },
+        );
     }
 
     fn ensure_image(&mut self, id: &str, url: String) {

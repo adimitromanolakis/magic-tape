@@ -25,6 +25,12 @@ impl ThumbCache {
         self.textures.get(id).cloned().unwrap_or_else(|| self.placeholder.clone())
     }
 
+    /// Whether a real picture has arrived, so the UI can draw an initial
+    /// instead of the placeholder while it is still missing.
+    pub fn has(&self, id: &str) -> bool {
+        self.textures.contains_key(id)
+    }
+
     pub fn insert(&mut self, ctx: &Context, id: &str, path: PathBuf) {
         if let Ok(bytes) = std::fs::read(&path)
             && let Ok(source) = image::load_from_memory(&bytes).map(|i| i.into_rgba8()) {
@@ -103,6 +109,29 @@ pub fn public_variants(url: &str) -> Vec<String> {
         .iter()
         .map(|name| format!("https://i.ytimg.com/vi/{id}/{name}"))
         .collect()
+}
+
+/// A channel avatar URL we can actually fetch, or `None` if there is not one.
+///
+/// Two traps live here. YouTube hands out avatar URLs protocol-relative
+/// (`//yt3.googleusercontent.com/...`), which a plain GET cannot resolve, and
+/// a *video* thumbnail on `i.ytimg.com` is not a channel picture at all - the
+/// subscriptions file stores only an id, and `i.ytimg.com/vi/<UC...>` 404s for
+/// every channel. Neither is worth requesting, so both become "no picture".
+pub fn channel_avatar_url(raw: Option<String>) -> Option<String> {
+    let url = raw?;
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("//") {
+        return Some(format!("https:{trimmed}"));
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return None;
+    }
+    let path = trimmed.split('?').next().unwrap_or(trimmed);
+    (!path.contains("i.ytimg.com/vi/")).then(|| trimmed.to_string())
 }
 
 fn load_placeholder(ctx: &Context) -> TextureHandle {
@@ -190,5 +219,48 @@ mod tests {
         assert!(!cache.request_pending("abc"), "known dead, stop asking");
         cache.forget_all();
         assert!(cache.request_pending("abc"), "a cache wipe forgets the dead too");
+    }
+}
+
+#[cfg(test)]
+mod avatar_tests {
+    use super::*;
+
+    #[test]
+    fn protocol_relative_avatars_get_a_scheme() {
+        // What yt-dlp hands over for a searched channel; a bare GET on this
+        // fails with "relative URL without a base".
+        assert_eq!(
+            channel_avatar_url(Some(
+                "//yt3.googleusercontent.com/ytc/AIdro_nFz=s176-c-k-c0x00ffffff-no-rj".into()
+            )),
+            Some("https://yt3.googleusercontent.com/ytc/AIdro_nFz=s176-c-k-c0x00ffffff-no-rj".into())
+        );
+    }
+
+    #[test]
+    fn a_video_thumbnail_is_not_a_channel_avatar() {
+        // i.ytimg.com/vi/<UC...> 404s for every channel id.
+        assert_eq!(
+            channel_avatar_url(Some("https://i.ytimg.com/vi/UCYO_jab/mqdefault.jpg".into())),
+            None
+        );
+        assert_eq!(
+            channel_avatar_url(Some("https://i.ytimg.com/vi/abc/mqdefault.jpg?sqp=x".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn nothing_to_fetch_stays_nothing_to_fetch() {
+        assert_eq!(channel_avatar_url(None), None);
+        assert_eq!(channel_avatar_url(Some("  ".into())), None);
+        assert_eq!(channel_avatar_url(Some("garbage".into())), None);
+    }
+
+    #[test]
+    fn a_real_avatar_passes_through_untouched() {
+        let url = "https://yt3.googleusercontent.com/ytc/AIdro_nFz=s900-c-k-c0x00ffffff-no-rj";
+        assert_eq!(channel_avatar_url(Some(url.into())), Some(url.into()));
     }
 }

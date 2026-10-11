@@ -216,7 +216,9 @@ fn channel_controls(app: &mut App, ui: &mut egui::Ui) {
         app.channel_results = subs
             .into_iter()
             .map(|(id, name)| crate::model::Channel {
-                thumbnail: Some(format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg")),
+                // The subscriptions file has no avatar URL; one is fetched from
+                // the channel page and cached, rather than guessed at.
+                thumbnail: None,
                 id,
                 name,
                 subscribers: None,
