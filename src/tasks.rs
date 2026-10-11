@@ -47,6 +47,12 @@ pub enum Outcome {
         id: String,
         path: PathBuf,
     },
+    /// A thumbnail that cannot be fetched at all - a custom thumbnail with no
+    /// public variant. Not worth interrupting the user over.
+    ThumbnailMissing {
+        id: String,
+        error: String,
+    },
     Failed {
         label: String,
         error: String,
@@ -120,11 +126,30 @@ pub fn download_thumbnail(url: &str, dest: PathBuf) -> Result<()> {
     if dest.exists() {
         return Ok(());
     }
-    let bytes = thumbnail_client()?
+    // The URL yt-dlp hands over is frequently unreachable: a custom thumbnail is
+    // owner-only, and the high-resolution variants are simply absent on older
+    // uploads. Walk the public variants and keep the first that answers, so a
+    // card shows a picture instead of a stack of 404s.
+    let mut last = None;
+    for candidate in crate::thumbs::public_variants(url) {
+        match fetch_thumbnail(&candidate) {
+            Ok(bytes) => return write_thumbnail(dest, bytes),
+            Err(error) => last = Some(error),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no thumbnail candidate for {url}")))
+}
+
+fn fetch_thumbnail(url: &str) -> Result<Vec<u8>> {
+    Ok(thumbnail_client()?
         .get(url)
         .send()?
         .error_for_status()?
-        .bytes()?;
+        .bytes()?
+        .to_vec())
+}
+
+fn write_thumbnail(dest: PathBuf, bytes: Vec<u8>) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).ok();
     }

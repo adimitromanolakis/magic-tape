@@ -170,6 +170,7 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     if total == 0 {
         egui::ScrollArea::vertical()
             .max_height(240.0)
+            .auto_shrink([false, false])
             .id_salt("subs_scroll")
             .show(ui, |ui| {
                 ui.label(
@@ -198,6 +199,9 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .id_salt("subs_scroll")
             .max_height(240.0)
+            // Without this the box shrinks to the width of the rows and the bar
+            // is drawn inset from the panel edge instead of at its right side.
+            .auto_shrink([false, false])
             .show_rows(ui, row_height, matching, |ui, range| {
                 // egui draws a vertical scrollbar *over* the content instead of
                 // reserving room for it, so each row is allocated to stop short

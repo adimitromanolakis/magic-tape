@@ -146,6 +146,19 @@ to be `$HOME + value`, so `/mnt` silently became `$HOME/mnt`; `config::resolve_d
 single place this is decided, and it is covered by tests including the migration of the old
 `/Downloads` default to `~/Downloads`.
 
+**Thumbnails** — the URL yt-dlp hands over is often unreachable: a `*_custom_*.jpg` is the
+owner's own thumbnail and is served to nobody else, and the sharp variants are simply absent on
+older uploads. A *removed* video has none at all - `Zper_lsRofk` 404s on `mqdefault` too - so no
+amount of retrying helps. `model::pick_thumbnail` skips the owner-only names up front, and
+`tasks::download_thumbnail` walks `thumbs::public_variants` (maxres → hq720 → hqdefault →
+mqdefault, 16:9 last as the safety net) and keeps the first that answers. A video with nothing
+public ends up on the placeholder via `ThumbCache::failed`, and logs a warning: it used to raise a
+red toast per card, which buried the UI.
+
+**Scrollbars** — every `ScrollArea` needs `auto_shrink([false, false])`. Without it the box hugs
+its content width and the bar is drawn inset from the panel edge instead of at it; the sidebar's
+two were the only ones missing it.
+
 **Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
 frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
 request (`tasks.rs` keeps one in a `OnceLock` for all workers).
@@ -327,6 +340,7 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
 | Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |
 | Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |
 | Font resolution | `resolves_by_name_and_by_path`, `accepts_a_path_that_exists`, `falls_back_to_a_prefix_match`, `display_name_drops_the_extension`, `zoom_is_clamped_to_something_usable` |

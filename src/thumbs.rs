@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
@@ -6,6 +6,8 @@ use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 pub struct ThumbCache {
     textures: HashMap<String, TextureHandle>,
     pending: HashMap<String, String>,
+    /// Ids with no public thumbnail. Asking again would only 404 again.
+    failed: HashSet<String>,
     placeholder: TextureHandle,
 }
 
@@ -14,6 +16,7 @@ impl ThumbCache {
         Self {
             textures: HashMap::new(),
             pending: HashMap::new(),
+            failed: HashSet::new(),
             placeholder: load_placeholder(ctx),
         }
     }
@@ -38,7 +41,9 @@ impl ThumbCache {
     }
 
     pub fn request_pending(&mut self, id: &str) -> bool {
-        !self.textures.contains_key(id) && !self.pending.contains_key(id)
+        !self.textures.contains_key(id)
+            && !self.pending.contains_key(id)
+            && !self.failed.contains(id)
     }
 
     pub fn mark_pending(&mut self, id: &str, url: String) {
@@ -49,14 +54,55 @@ impl ThumbCache {
         self.pending.remove(id);
     }
 
+    /// Remembers that an id has no reachable thumbnail, so the placeholder
+    /// stays put instead of the request being retried on every frame.
+    pub fn mark_failed(&mut self, id: &str) {
+        self.failed.insert(id.to_string());
+    }
+
     pub fn forget_all(&mut self) {
         self.textures.clear();
         self.pending.clear();
+        self.failed.clear();
     }
 
     pub fn cached_count(&self) -> usize {
         self.textures.len()
     }
+}
+
+/// The video id in an `i.ytimg.com` thumbnail URL, if that is what it is.
+pub fn video_id_of(url: &str) -> Option<&str> {
+    let path = url.split('?').next().unwrap_or(url);
+    let rest = path.split_once("/vi/")?.1;
+    let id = rest.split('/').next().unwrap_or_default();
+    (!id.is_empty()).then_some(id)
+}
+
+/// Whether a URL is one of YouTube's owner-only "custom" thumbnails.
+///
+/// Those are served to the uploader and their subscribers, not to anonymous
+/// requests: asking for one is a guaranteed 404. A video whose owner uploaded
+/// a custom thumbnail has no public variant at all, which is a different thing
+/// and only a runtime fallback can discover.
+pub fn is_custom_thumbnail(url: &str) -> bool {
+    let path = url.split('?').next().unwrap_or(url);
+    path.rsplit('/').next().is_some_and(|f| f.contains("_custom_"))
+}
+
+/// Candidate URLs to try, best first, for a thumbnail that may be unreachable.
+///
+/// The named variants are tried from sharpest to smallest; `mqdefault` is last
+/// because it is 16:9 - the shape the cards use - and the one YouTube keeps
+/// published most reliably.
+pub fn public_variants(url: &str) -> Vec<String> {
+    let Some(id) = video_id_of(url) else {
+        return vec![url.to_string()];
+    };
+    ["maxresdefault.jpg", "hq720.jpg", "hqdefault.jpg", "mqdefault.jpg"]
+        .iter()
+        .map(|name| format!("https://i.ytimg.com/vi/{id}/{name}"))
+        .collect()
 }
 
 fn load_placeholder(ctx: &Context) -> TextureHandle {
@@ -71,4 +117,78 @@ fn load_placeholder(ctx: &Context) -> TextureHandle {
     }
     let image = ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &pixels);
     ctx.load_texture("placeholder", image, TextureOptions::NEAREST)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_video_id_out_of_a_thumbnail_url() {
+        assert_eq!(
+            video_id_of("https://i.ytimg.com/vi/Zper_lsRofk/hq720_custom_2.jpg"),
+            Some("Zper_lsRofk")
+        );
+        assert_eq!(
+            video_id_of("https://i.ytimg.com/vi/abc123/hq720.jpg?sqp=xyz&rs=1"),
+            Some("abc123"),
+            "the signed query string is not part of the id"
+        );
+        assert_eq!(video_id_of("https://example.com/thumb.png"), None);
+    }
+
+    #[test]
+    fn spotts_the_owner_only_variants() {
+        assert!(is_custom_thumbnail(
+            "https://i.ytimg.com/vi/Zper_lsRofk/hq720_custom_2.jpg"
+        ));
+        assert!(is_custom_thumbnail(
+            "https://i.ytimg.com/vi/Zper_lsRofk/hq720_custom_2.jpg?sqp=x"
+        ));
+        assert!(!is_custom_thumbnail(
+            "https://i.ytimg.com/vi/Zper_lsRofk/hq720.jpg"
+        ));
+        assert!(!is_custom_thumbnail(
+            "https://i.ytimg.com/vi/Zper_lsRofk/mqdefault.jpg"
+        ));
+    }
+
+    #[test]
+    fn variants_are_the_same_video_sharpest_first() {
+        let variants = public_variants("https://i.ytimg.com/vi/Zper_lsRofk/hq720_custom_2.jpg");
+        assert_eq!(
+            variants,
+            vec![
+                "https://i.ytimg.com/vi/Zper_lsRofk/maxresdefault.jpg",
+                "https://i.ytimg.com/vi/Zper_lsRofk/hq720.jpg",
+                "https://i.ytimg.com/vi/Zper_lsRofk/hqdefault.jpg",
+                "https://i.ytimg.com/vi/Zper_lsRofk/mqdefault.jpg",
+            ]
+        );
+        assert!(
+            variants.last().unwrap().ends_with("mqdefault.jpg"),
+            "the 16:9 fallback must be tried last so it is the safety net"
+        );
+    }
+
+    #[test]
+    fn a_url_from_elsewhere_is_left_alone() {
+        let url = "https://example.com/thumb.png";
+        assert_eq!(public_variants(url), vec![url.to_string()]);
+    }
+
+    #[test]
+    fn a_failed_id_is_never_asked_for_again() {
+        let ctx = Context::default();
+        let mut cache = ThumbCache::new(&ctx);
+        assert!(cache.request_pending("abc"));
+        cache.mark_pending("abc", "https://example.com/x.jpg".into());
+        assert!(!cache.request_pending("abc"), "already in flight");
+        cache.clear_pending("abc");
+        assert!(cache.request_pending("abc"), "free to try again");
+        cache.mark_failed("abc");
+        assert!(!cache.request_pending("abc"), "known dead, stop asking");
+        cache.forget_all();
+        assert!(cache.request_pending("abc"), "a cache wipe forgets the dead too");
+    }
 }

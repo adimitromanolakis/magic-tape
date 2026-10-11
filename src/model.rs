@@ -290,6 +290,8 @@ fn pick_thumbnail(thumbs: Vec<RawThumbnail>) -> Option<String> {
             let url = url.split('?').next().unwrap_or(url);
             (!url.is_empty()).then(|| url.to_string())
         })
+        // A custom thumbnail is owner-only, so it is never the one to ask for.
+        .filter(|url| !crate::thumbs::is_custom_thumbnail(url))
         .find(|url| url.contains("/vi/"))
         .or_else(|| {
             thumbs.iter().find_map(|t| {

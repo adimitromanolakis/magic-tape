@@ -785,8 +785,8 @@ impl App {
             "download thumbnail",
             move || match crate::tasks::download_thumbnail(&url, dest.clone()) {
                 Ok(()) => Outcome::ThumbnailReady { id, path: dest },
-                Err(error) => Outcome::Failed {
-                    label: "downloading thumbnail".into(),
+                Err(error) => Outcome::ThumbnailMissing {
+                    id,
                     error: error.to_string(),
                 },
             },
@@ -925,6 +925,13 @@ impl App {
             }
             Outcome::YtDlpUpdated { version } => {
                 self.ytdlp_version = version;
+            }
+            Outcome::ThumbnailMissing { id, error } => {
+                // Logged, not toasted: a channel of uploads with private
+                // thumbnails used to bury the UI under red boxes.
+                self.thumbs.clear_pending(&id);
+                self.thumbs.mark_failed(&id);
+                log::warn!("thumbnail unavailable for {id}: {error}");
             }
             Outcome::ThumbnailReady { id, path } => {
                 self.thumbs.clear_pending(&id);
