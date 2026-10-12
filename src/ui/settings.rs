@@ -264,6 +264,17 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
                 .desired_width(220.0)
                 .hint_text("/Downloads, /tmp/youtube, ~/Videos"),
         );
+        if ui
+            .button("Browse...")
+            .on_hover_text("Pick a folder from the filesystem")
+            .clicked()
+        {
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+            app.folder_picker = Some(crate::ui::folder_picker::FolderPicker::start(
+                &app.config.download_directory,
+                &home,
+            ));
+        }
     });
     let resolved = app.download_dir();
     ui.add(

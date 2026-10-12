@@ -191,6 +191,7 @@ impl eframe::App for MagicTape {
             });
 
         settings::settings_window(&mut self.app, &ctx);
+        crate::ui::folder_picker::picker_window(&mut self.app, &ctx);
         settings::shortcuts_window(&mut self.app, &ctx);
         toasts::render(&mut self.app, &ctx);
     }
@@ -260,7 +261,17 @@ impl MagicTape {
         match command {
             Some(Command::Quit) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Some(Command::Settings) => self.app.show_settings = true,
-            Some(Command::FocusSearch) => self.app.search_input.clear(),
+            Some(Command::FocusSearch) => {
+                // Clear and focus: the box only lives in the Feeds section, so
+                // go there first rather than asking for focus that nothing
+                // will answer.
+                if self.app.section != Section::Feeds {
+                    self.app.select(None);
+                    self.app.section = Section::Feeds;
+                }
+                self.app.search_input.clear();
+                self.app.focus_search = true;
+            }
             Some(Command::MoveDown) => self.move_selection(1),
             Some(Command::MoveUp) => self.move_selection(-1),
             Some(Command::PageDown) => {

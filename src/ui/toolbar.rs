@@ -3,7 +3,7 @@ use eframe::egui;
 use crate::app::{App, Section, ToastKind};
 use crate::config::ListView;
 use crate::model::{DurationFilter, Feed};
-use crate::ui::{accent, muted};
+use crate::ui::{accent, focus_search_input, muted, SEARCH_INPUT_ID};
 
 pub fn toolbar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
@@ -100,9 +100,16 @@ fn feed_controls(app: &mut App, ui: &mut egui::Ui) {
     // way to start another search.
     ui.add(
         egui::TextEdit::singleline(&mut app.search_input)
+            .id_source(SEARCH_INPUT_ID)
             .hint_text("Search YouTube...")
             .desired_width(220.0),
     );
+    if app.focus_search {
+        // Only this section carries the main search box, so the flag is
+        // cleared here rather than when the key is pressed.
+        app.focus_search = false;
+        focus_search_input(ui);
+    }
     if ui.button("Search").clicked() {
         start_search(app);
     }

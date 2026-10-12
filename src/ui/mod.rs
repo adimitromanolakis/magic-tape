@@ -1,4 +1,5 @@
 pub mod detail;
+pub mod folder_picker;
 pub mod settings;
 pub mod sidebar;
 pub mod toasts;
@@ -36,6 +37,19 @@ pub fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::InnerRe
 /// scrollbar never covers the last characters of a row. egui draws the bar
 /// over the content instead of reserving room for it.
 pub const SCROLLBAR_GAP: f32 = 14.0;
+
+/// Id of the main search box, so the `Ctrl+F` shortcut can focus the very
+/// widget the toolbar draws. Both sides must agree on this.
+pub const SEARCH_INPUT_ID: &str = "main_search";
+
+/// Puts the caret in the main search box.
+///
+/// Called once per frame while `App::focus_search` is set: `request_focus` is
+/// a request for the *next* frame, so asking once and hoping is not enough.
+pub fn focus_search_input(ui: &egui::Ui) {
+    ui.ctx()
+        .memory_mut(|memory| memory.request_focus(egui::Id::new(SEARCH_INPUT_ID)));
+}
 
 pub fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
     let font = font.clone();
