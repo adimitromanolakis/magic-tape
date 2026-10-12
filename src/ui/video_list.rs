@@ -16,9 +16,10 @@ const LIST_ROW_MARGIN: f32 = 4.0;
 const LIST_ROW_H: f32 = LIST_ROW_CONTENT_H + 2.0 * LIST_ROW_MARGIN;
 
 /// Row geometry for the channel list, same rule as above.
-const CHANNEL_ROW_CONTENT_H: f32 = 40.0;
-const CHANNEL_ROW_MARGIN: f32 = 6.0;
-const CHANNEL_ROW_H: f32 = CHANNEL_ROW_CONTENT_H + 2.0 * CHANNEL_ROW_MARGIN;
+/// Width of one channel card before the gaps are taken out.
+const CHANNEL_TILE_W: f32 = 190.0;
+/// Room under the avatar for the name and the subscriber count.
+const CHANNEL_CARD_TEXT_H: f32 = 40.0;
 
 pub fn content(app: &mut App, ui: &mut egui::Ui) {
     match app.section {
@@ -156,6 +157,15 @@ fn grid_card(
         );
     }
 
+    // The card can only fit an ellipsised title, so hovering the picture
+    // reports what was cut off. `Sense::hover` keeps the card's click target.
+    ui.interact(
+        thumb_rect,
+        ui.make_persistent_id(("thumb_title", index)),
+        egui::Sense::hover(),
+    )
+    .on_hover_text(video.title.clone());
+
     let title_font = egui::FontId::proportional(12.5);
     let sub_font = egui::FontId::proportional(11.5);
     let detail = match (&video.published, video.views_label()) {
@@ -219,12 +229,14 @@ fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let texture = app.thumbs.get(&video.id);
-                        let response = ui.add(
-                            egui::Image::new(&texture)
-                                .fit_to_exact_size(egui::vec2(120.0, 68.0))
-                                .corner_radius(4.0)
-                                .sense(egui::Sense::click()),
-                        );
+                        let response = ui
+                            .add(
+                                egui::Image::new(&texture)
+                                    .fit_to_exact_size(egui::vec2(120.0, 68.0))
+                                    .corner_radius(4.0)
+                                    .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(video.title.clone());
                         handle_click(app, &response, index, &video);
                         ui.vertical(|ui| {
                             ui.add(
@@ -324,82 +336,119 @@ fn channel_list(app: &mut App, ui: &mut egui::Ui) {
         });
         return;
     }
-    let row_h = CHANNEL_ROW_H;
+    // A grid of equal cards rather than a ragged list: the names line up in
+    // columns, so the eye scans down them instead of chasing a ragged edge.
+    let available = (ui.available_width() - SCROLLBAR_GAP).max(200.0);
+    let columns = ((available / CHANNEL_TILE_W).floor() as usize).clamp(1, 8);
+    app.columns = columns;
+    let gap = 8.0;
+    let tile = (available - gap * (columns.saturating_sub(1)) as f32) / columns as f32;
+    let avatar = (tile - 24.0).clamp(40.0, 104.0);
+    let card_h = avatar + CHANNEL_CARD_TEXT_H;
+    let row_h = card_h + gap;
+    let rows = count.div_ceil(columns);
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("channels_scroll")
-        .auto_shrink([false, false])
-        .max_width((ui.available_width() - SCROLLBAR_GAP).max(200.0));
-    let scroll = match app.take_scroll_offset(1, row_h, viewport) {
+        .auto_shrink([false, false]);
+    let scroll = match app.take_scroll_offset(columns, row_h, viewport) {
         Some(offset) => scroll.vertical_scroll_offset(offset),
         None => scroll,
     };
     app.visible_rows = (viewport / row_h).floor().max(1.0) as usize;
-    scroll.show_rows(ui, row_h, count, |ui, range| {
-            for index in range {
-                let Some(channel) = app.channel_results.get(index).cloned() else {
+
+    scroll.show_rows(ui, row_h, rows, |ui, range| {
+        for row in range {
+            ui.spacing_mut().item_spacing.x = gap;
+            for column in 0..columns {
+                let index = row * columns + column;
+                if index >= count {
+                    ui.add_space(tile);
                     continue;
-                };
+                }
+                let channel = app.channel_results[index].clone();
                 app.ensure_channel_thumbnail(&channel);
                 let selected = app.selected == Some(index);
-                egui::Frame::new()
-                    .fill(if selected {
-                        ui.visuals().widgets.active.bg_fill
-                    } else {
-                        ui.visuals().panel_fill
-                    })
-                    .corner_radius(6.0)
-                    .inner_margin(CHANNEL_ROW_MARGIN)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let texture = app.thumbs.get(&channel.id);
-                            let response = ui.add(
-                                egui::Image::new(&texture)
-                                    .fit_to_exact_size(egui::vec2(
-                                        72.0,
-                                        CHANNEL_ROW_CONTENT_H,
-                                    ))
-                                    .corner_radius(4.0)
-                                    .sense(egui::Sense::click()),
-                            );
-                            response.context_menu(|ui| {
-                                let channel = app.channel_results[index].clone();
-                                if ui.button("Unsubscribe").clicked() {
-                                    app.unsubscribe(&channel.name);
-                                }
-                                if ui.button("Copy channel name").clicked() {
-                                    ui.ctx().copy_text(channel.name.clone());
-                                }
-                            });
-                            if response.clicked() {
-                                app.select(Some(index));
-                                if let Some(channel) = app.current_channel() {
-                                    app.section = Section::Feeds;
-                                    app.feed = crate::model::Feed::Channel;
-                                    app.channel_id = channel.id.clone();
-                                    app.channel_name = channel.name.clone();
-                                    app.load_feed(crate::model::Feed::Channel, 0);
-                                }
-                            }
-                            ui.vertical(|ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(channel.name.clone()).size(13.0).strong(),
-                                    )
-                                    .truncate(),
-                                );
-                                if let Some(subs) = &channel.subscribers {
-                                    ui.label(
-                                        egui::RichText::new(format!("{subs} subscribers"))
-                                            .size(11.5)
-                                            .color(warn_color()),
-                                    );
-                                }
-                            });
-                        });
-                    });
+
+                // Painted by hand, like the quick-access rows: one allocation
+                // gives both the hover state and the click target.
+                let size = egui::vec2(tile, card_h);
+                let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+                let fill = if selected {
+                    ui.visuals().widgets.active.bg_fill
+                } else if response.hovered() {
+                    ui.visuals().widgets.hovered.bg_fill
+                } else {
+                    ui.visuals().panel_fill
+                };
+                ui.painter().rect_filled(rect, 8.0, fill);
+
+                let inner = rect.shrink(8.0);
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(inner)
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                );
+                if app.thumbs.has(&channel.id) {
+                    let texture = app.thumbs.get(&channel.id);
+                    child.add(
+                        egui::Image::new(&texture)
+                            .fit_to_exact_size(egui::vec2(avatar, avatar))
+                            .corner_radius(avatar / 2.0),
+                    );
+                } else {
+                    // Until the picture arrives - and for any channel that
+                    // publishes none - show the initial, not a checkerboard.
+                    let avatar_rect =
+                        egui::Rect::from_center_size(inner.center(), egui::vec2(avatar, avatar));
+                    child.painter().circle_filled(
+                        avatar_rect.center(),
+                        avatar / 2.0,
+                        child.visuals().widgets.inactive.bg_fill,
+                    );
+                    let initial: String = channel.name.chars().take(1).collect();
+                    child.painter().text(
+                        avatar_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        initial.to_uppercase(),
+                        egui::FontId::proportional(avatar * 0.4),
+                        child.visuals().weak_text_color(),
+                    );
+                }
+                child.add_space(4.0);
+                let font = egui::FontId::proportional(12.5);
+                let label = ellipsize(&child, &channel.name, &font, inner.width());
+                child.add(
+                    egui::Label::new(egui::RichText::new(label).size(12.5).strong())
+                        .truncate(),
+                );
+                if let Some(subs) = &channel.subscribers {
+                    child.label(
+                        egui::RichText::new(format!("{subs} subscribers"))
+                            .size(11.0)
+                            .color(warn_color()),
+                    );
+                }
+
+                response.context_menu(|ui| {
+                    if ui.button("Unsubscribe").clicked() {
+                        app.unsubscribe(&channel.name);
+                    }
+                    if ui.button("Copy channel name").clicked() {
+                        ui.ctx().copy_text(channel.name.clone());
+                    }
+                });
+                if response.clicked() {
+                    app.select(Some(index));
+                    app.section = Section::Feeds;
+                    app.feed = crate::model::Feed::Channel;
+                    app.channel_id = channel.id.clone();
+                    app.channel_name = channel.name.clone();
+                    app.load_feed(crate::model::Feed::Channel, 0);
+                }
             }
-        });
+        }
+    });
 }
 
 fn empty_state(app: &mut App, ui: &mut egui::Ui) {
