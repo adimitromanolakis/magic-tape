@@ -44,15 +44,10 @@ impl FolderPicker {
         self.enter(parent_dir(&self.current, home));
     }
 
-    /// The folder to hand back: what was typed, if it is a real directory,
-    /// otherwise the one being looked at.
-    pub fn selection(&self) -> PathBuf {
-        let typed = Path::new(&self.typed);
-        if typed.is_dir() {
-            typed.to_path_buf()
-        } else {
-            self.current.clone()
-        }
+    /// The folder to hand back: what was typed, if it resolves to a real
+    /// directory, otherwise the one being looked at.
+    pub fn selection(&self, home: &Path) -> PathBuf {
+        resolve_typed_path(&self.typed, home).unwrap_or_else(|_| self.current.clone())
     }
 }
 
@@ -81,6 +76,36 @@ pub fn parent_dir(dir: &Path, home: &Path) -> PathBuf {
         // A bare relative name such as "Videos": there is nothing above it to
         // go to, so start from home.
         Some(_) => home.to_path_buf(),
+    }
+}
+
+/// Where a typed path actually points.
+///
+/// Written once here because the path bar, the New folder box and "Use this
+/// folder" must all agree: a path is usable if it exists *after* `~` and
+/// relative paths are resolved, not before. The old inline check asked
+/// `Path::new(text).is_dir()` straight, which is false for `~/Videos` and for
+/// anything relative - so Go did nothing at all, with no message.
+pub fn resolve_typed_path(typed: &str, home: &Path) -> Result<PathBuf, String> {
+    let text = typed.trim();
+    if text.is_empty() {
+        return Err("Type a folder to go to".into());
+    }
+    let wanted = if text == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = text.strip_prefix("~/") {
+        home.join(rest)
+    } else if Path::new(text).is_absolute() {
+        PathBuf::from(text)
+    } else {
+        home.join(text)
+    };
+    if wanted.is_dir() {
+        Ok(wanted)
+    } else if wanted.exists() {
+        Err(format!("{} is a file, not a folder", wanted.display()))
+    } else {
+        Err(format!("{} does not exist", wanted.display()))
     }
 }
 
@@ -272,18 +297,36 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut picker.typed)
+                        .id_source("picker_path")
+                        .hint_text("/mnt, ~/Videos, /run/media/user/disk")
                         .desired_width(ui.available_width() - 60.0),
                 );
-                if ui.button("Go").clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
-                    let wanted = PathBuf::from(picker.typed.trim());
-                    if wanted.is_dir() {
-                        picker.enter(wanted);
-                    } else if wanted.is_absolute() {
-                        error = Some(format!("{} is not a folder", wanted.display()));
+                // Enter has to work while the box still has focus: the old
+                // check waited for focus to be *lost*, which is exactly what
+                // clicking Go does, so pressing Enter did nothing at all.
+                let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let go = ui.button("Go").clicked()
+                    || (enter_pressed && (response.has_focus() || response.lost_focus()));
+                if go {
+                    log::info!("[picker] go :: typed {:?}", picker.typed);
+                    match resolve_typed_path(&picker.typed, &home) {
+                        Ok(path) => {
+                            log::info!("[picker] go :: resolved to {}", path.display());
+                            picker.enter(path);
+                            error = None;
+                        }
+                        // Always say something. A path that resolves to nothing
+                        // used to fail silently, which reads as "Go is broken".
+                        Err(problem) => {
+                            log::warn!("[picker] go :: {problem}");
+                            error = Some(problem);
+                        }
                     }
                 }
             });
+            if let Some(problem) = &error {
+                ui.colored_label(egui::Color32::from_rgb(0xE0, 0x70, 0x70), problem);
+            }
 
             let body = ui.available_height();
             ui.horizontal_top(|ui| {
@@ -459,16 +502,14 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                     }
                 });
             });
-            if let Some(problem) = &error {
-                ui.colored_label(egui::Color32::from_rgb(0xE0, 0x70, 0x70), problem);
-            }
         });
 
     if cancelled {
         open = false;
     }
     if chosen {
-        let folder = picker.selection();
+        let folder = picker.selection(&home);
+        log::info!("[picker] chosen {}", folder.display());
         let folder = crate::config::resolve_download_dir(&folder.display().to_string(), &home);
         app.config.download_directory = folder.display().to_string();
         app.config.clamp();
@@ -654,6 +695,51 @@ tmpfs /run/user/1000 tmpfs rw 0 0
     }
 
     #[test]
+    fn a_typed_path_is_resolved_like_everything_else() {
+        let root = scratch("typed");
+        let home = root.join("me");
+        let videos = home.join("Videos");
+        std::fs::create_dir_all(&videos).unwrap();
+
+        // The three forms the path bar has to accept.
+        assert_eq!(
+            resolve_typed_path(&videos.display().to_string(), &home),
+            Ok(videos.clone())
+        );
+        assert_eq!(resolve_typed_path("~/Videos", &home), Ok(videos.clone()));
+        assert_eq!(resolve_typed_path("Videos", &home), Ok(videos.clone()));
+        assert_eq!(resolve_typed_path("  ~/Videos  ", &home), Ok(videos.clone()));
+        assert_eq!(resolve_typed_path("~", &home), Ok(home.clone()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bad_typed_path_says_so_instead_of_doing_nothing() {
+        let root = scratch("typed-bad");
+        let home = root.join("me");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(root.join("a-file"), "x").unwrap();
+
+        assert!(resolve_typed_path("   ", &home).is_err(), "empty");
+        assert!(
+            resolve_typed_path("/nowhere/at/all", &home).unwrap_err().contains("does not exist")
+        );
+        assert!(
+            resolve_typed_path("~/missing", &home)
+                .unwrap_err()
+                .contains(&home.join("missing").display().to_string()),
+            "the message shows the resolved path, not the raw text"
+        );
+        assert!(
+            resolve_typed_path("../a-file", &home)
+                .unwrap_err()
+                .contains("is a file"),
+            "a file is not a folder"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_typed_path_wins_when_it_is_a_real_folder() {
         let root = scratch("selection");
         let other = root.join("other");
@@ -663,7 +749,7 @@ tmpfs /run/user/1000 tmpfs rw 0 0
             typed: other.display().to_string(),
             new_folder: String::new(),
         };
-        assert_eq!(picker.selection(), other);
+        assert_eq!(picker.selection(&root), other);
 
         // Nonsense typed: fall back to what is being looked at.
         let picker = FolderPicker {
@@ -671,7 +757,7 @@ tmpfs /run/user/1000 tmpfs rw 0 0
             typed: "/nope/nowhere".into(),
             new_folder: String::new(),
         };
-        assert_eq!(picker.selection(), root);
+        assert_eq!(picker.selection(&root), root);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
