@@ -109,6 +109,19 @@ pub fn resolve_typed_path(typed: &str, home: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// How much height the two-column body may take.
+///
+/// Both bounds matter: the screen ceiling stops the window growing past the
+/// bottom edge, and the absolute cap stops it being silly on a tall display at
+/// 1x. Below the minimum it would be too cramped to be useful, so the window is
+/// allowed to scroll instead.
+pub fn body_height(available: f32, screen_height: f32) -> f32 {
+    available
+        .max(0.0)
+        .min((screen_height * 0.55).clamp(200.0, 520.0))
+        .max(160.0)
+}
+
 /// Immediate subdirectories, dot-directories hidden, case-insensitive order.
 ///
 /// Files are left out on purpose: this picks a folder, not a file.
@@ -291,7 +304,8 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
         .open(&mut open)
         .resizable(true)
         .default_width(700.0)
-        .default_height(480.0)
+        .default_height(460.0)
+        .min_size(egui::vec2(420.0, 240.0))
         .show(ctx, |ui| {
             // Path bar: type anywhere and go.
             ui.horizontal(|ui| {
@@ -328,7 +342,14 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                 ui.colored_label(egui::Color32::from_rgb(0xE0, 0x70, 0x70), problem);
             }
 
-            let body = ui.available_height();
+            // The body height must not come from `available_height` alone: in a
+            // window that is circular - the window sizes itself to its content
+            // while the content asks for everything available - so it grows
+            // until the footer drops off the bottom of the screen and
+            // "Use this folder" cannot be reached. Ceiling it against the
+            // screen keeps the buttons on screen at any zoom level.
+            let screen = ctx.viewport_rect();
+            let body = body_height(ui.available_height(), screen.height());
             ui.horizontal_top(|ui| {
                 // Places and volumes.
                 ui.allocate_ui_with_layout(
@@ -398,7 +419,7 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                             );
                         });
                         ui.add_space(4.0);
-                        let listing = ui.available_height() - 40.0;
+                        let listing = (body - 28.0).max(120.0);
                         egui::ScrollArea::vertical()
                             .id_salt("picker_listing")
                             .auto_shrink([false, false])
@@ -695,6 +716,26 @@ tmpfs /run/user/1000 tmpfs rw 0 0
     }
 
     #[test]
+    fn the_body_never_grows_past_the_screen() {
+        // The bug: available_height inside a window is circular, so the window
+        // grew until the footer fell off the bottom.
+        let screen = 1440.0;
+        assert!(
+            body_height(10_000.0, screen) <= screen * 0.55,
+            "an enormous request is capped"
+        );
+        assert!(body_height(10_000.0, screen) <= 520.0, "and by an absolute cap");
+        // A tiny window still gets something usable.
+        assert!(body_height(10.0, screen) >= 160.0);
+        // A normal one is passed through untouched.
+        assert_eq!(body_height(400.0, screen), 400.0);
+        // Even a very tall screen is bounded, at 1x.
+        assert_eq!(body_height(10_000.0, 4000.0), 520.0);
+        // A small screen at high zoom still leaves room for the footer.
+        assert!(body_height(600.0, 720.0) <= 396.0);
+    }
+
+    #[test]
     fn a_typed_path_is_resolved_like_everything_else() {
         let root = scratch("typed");
         let home = root.join("me");
@@ -759,5 +800,63 @@ tmpfs /run/user/1000 tmpfs rw 0 0
         };
         assert_eq!(picker.selection(&root), root);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+#[cfg(test)]
+mod scratch_dump {
+    use super::*;
+    use crate::app::Startup;
+
+    #[allow(dead_code)]
+    fn click_at(ctx: &egui::Context, pos: egui::Pos2) {
+        let mut input = egui::RawInput::default();
+        let m = egui::Modifiers::default();
+        input.events.push(egui::Event::PointerMoved(pos));
+        input.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: m,
+        });
+        input.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: m,
+        });
+        ctx.request_repaint_after(std::time::Duration::from_millis(1));
+        let _ = ctx;
+    }
+
+    #[test]
+    #[ignore = "diagnostic"]
+    fn dump_what_is_rendered() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.folder_picker = Some(FolderPicker {
+            current: PathBuf::from("/home/apo"),
+            typed: "/tmp".into(),
+            new_folder: String::new(),
+        });
+        let out = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            crate::ui::folder_picker::picker_window(&mut app, ctx);
+        });
+        println!("shapes: {}", out.shapes.len());
+        for (i, shape) in out.shapes.iter().enumerate() {
+            println!(
+                "{i:3} {:?} clip={:?}",
+                match &shape.shape {
+                    egui::Shape::Rect(r) => format!(
+                        "rect at {:>5.0},{:>5.0} {}x{} fill={:?}",
+                        r.rect.min.x, r.rect.min.y, r.rect.width(), r.rect.height(), r.fill
+                    ),
+                    egui::Shape::Mesh(_) => "mesh (text batch)".to_string(),
+                    egui::Shape::Circle(c) => format!("circle {:?}", c.center),
+                    _ => "other".to_string(),
+                },
+                shape.clip_rect,
+            );
+        }
+        println!("current = {:?}", app.folder_picker.as_ref().map(|p| p.current.clone()));
     }
 }
