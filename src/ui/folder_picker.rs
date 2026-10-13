@@ -16,6 +16,8 @@ pub struct FolderPicker {
     /// Typed by the user, and where the folder is really taken from when it
     /// names a directory that exists.
     pub typed: String,
+    /// Name for a folder to create; not a path.
+    pub new_folder: String,
 }
 
 impl FolderPicker {
@@ -27,6 +29,7 @@ impl FolderPicker {
         Self {
             typed: current.display().to_string(),
             current,
+            new_folder: String::new(),
         }
     }
 
@@ -106,7 +109,105 @@ pub fn subdirectories(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Mount points that are worth offering: the volumes, not the system.
+///
+/// This is what a traditional chooser calls "Other Locations". Without it
+/// there is no way to reach `/mnt` or `/run/media/<user>/<volume>` without
+/// typing the path, which is the whole reason for a folder picker.
+///
+/// Prefixes a desktop file manager would also hide are dropped: btrfs
+/// subvolumes under `/home` and `/var`, `/usr`, and friends are not somewhere
+/// anyone downloads videos to.
+const INTERNAL_PREFIXES: [&str; 12] = [
+    "/home", "/usr", "/var", "/boot", "/etc", "/opt", "/srv", "/root", "/snap", "/proc", "/sys",
+    "/run/user",
+];
+
+/// The interesting mounts out of a `/proc/mounts` dump.
+///
+/// Kept pure and separate from the disk read so it can be tested against a
+/// fixture, which matters because this is the part that decides whether a USB
+/// stick shows up at all.
+pub fn parse_mounts(text: &str) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(device), Some(target)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        // A real filesystem, not a pseudo one.
+        if !device.starts_with("/dev/") {
+            continue;
+        }
+        if target == "/" || !target.starts_with('/') {
+            continue;
+        }
+        let hidden = INTERNAL_PREFIXES
+            .iter()
+            .any(|prefix| target == *prefix || target.starts_with(&format!("{prefix}/")));
+        if hidden {
+            continue;
+        }
+        let path = PathBuf::from(target);
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    outermost(out)
+}
+
+/// Keeps only the top of each stack of nested mounts.
+///
+/// A Steam library on a stick mounts its own volumes *inside* that stick's
+/// mount point, and a btrfs layout nests several more. Listing those alongside
+/// the drive they sit on is how you end up with thirteen entries and no idea
+/// which one is the disk.
+fn outermost(mounts: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut by_depth = mounts.clone();
+    by_depth.sort_by_key(|path| path.components().count());
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for mount in by_depth {
+        if !kept.iter().any(|parent| mount.starts_with(parent)) {
+            kept.push(mount);
+        }
+    }
+    // Back to the order the kernel listed them in, which is roughly the order
+    // they were plugged in - steadier for the eye than a sorted list.
+    mounts.into_iter().filter(|m| kept.contains(m)).collect()
+}
+
+/// Volumes currently mounted, if `/proc/mounts` can be read.
+pub fn volumes() -> Vec<PathBuf> {
+    std::fs::read_to_string("/proc/mounts")
+        .map(|text| parse_mounts(&text))
+        .unwrap_or_default()
+}
+
+/// The standard shortcuts down the side of a traditional chooser, skipping
+/// any that do not exist.
+pub fn places(home: &Path) -> Vec<(&'static str, PathBuf)> {
+    let candidates: [(&'static str, PathBuf); 9] = [
+        ("Home", home.to_path_buf()),
+        ("Desktop", home.join("Desktop")),
+        ("Downloads", home.join("Downloads")),
+        ("Documents", home.join("Documents")),
+        ("Videos", home.join("Videos")),
+        ("Music", home.join("Music")),
+        ("Pictures", home.join("Pictures")),
+        ("Home folder", PathBuf::from("/")),
+        ("tmp", PathBuf::from("/tmp")),
+    ];
+    candidates
+        .into_iter()
+        .filter(|(_, path)| path.is_dir())
+        .collect()
+}
+
 /// Renders the picker, and writes the answer back into the config.
+///
+/// Shaped like a traditional file chooser: a path bar across the top, the
+/// standard places and mounted volumes down the left, the current folder in
+/// the middle, and the actions along the bottom.
 pub fn picker_window(app: &mut App, ctx: &egui::Context) {
     let Some(mut picker) = app.folder_picker.take() else {
         return;
@@ -117,62 +218,174 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
     // Set inside the closure, applied after: `open` is already borrowed by
     // `.open(&mut open)`.
     let mut cancelled = false;
+    let mut error: Option<String> = None;
+    let volumes = volumes();
 
     egui::Window::new("Choose a folder")
         .open(&mut open)
         .resizable(true)
-        .default_width(460.0)
-        .default_height(400.0)
+        .default_width(700.0)
+        .default_height(480.0)
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new("Folder").color(muted()));
-            ui.add(
-                egui::TextEdit::singleline(&mut picker.typed)
-                    .desired_width(ui.available_width()),
-            );
+            // Path bar: type anywhere and go.
+            ui.horizontal(|ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut picker.typed)
+                        .desired_width(ui.available_width() - 60.0),
+                );
+                if ui.button("Go").clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    let wanted = PathBuf::from(picker.typed.trim());
+                    if wanted.is_dir() {
+                        picker.enter(wanted);
+                    } else if wanted.is_absolute() {
+                        error = Some(format!("{} is not a folder", wanted.display()));
+                    }
+                }
+            });
 
-            ui.add_space(4.0);
-            let listing = ui.available_height() - 60.0;
-            egui::ScrollArea::vertical()
-                .id_salt("folder_picker_list")
-                .auto_shrink([false, false])
-                .max_height(listing.max(120.0))
-                .show(ui, |ui| {
-                    if ui.selectable_label(false, ".. (up)").clicked() {
-                        picker.go_up(&home);
-                        return;
-                    }
-                    let dirs = subdirectories(&picker.current);
-                    if dirs.is_empty() {
+            let body = ui.available_height();
+            ui.horizontal_top(|ui| {
+                // Places and volumes.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(180.0, body),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
                         ui.label(
-                            egui::RichText::new("No subfolders here").size(12.0).color(muted()),
+                            egui::RichText::new("PLACES").size(10.5).color(muted()),
                         );
-                    }
-                    for dir in dirs {
-                        let name = dir
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned();
-                        if ui.selectable_label(false, name).clicked() {
-                            picker.enter(dir);
-                        }
-                    }
-                });
+                        egui::ScrollArea::vertical()
+                            .id_salt("picker_places")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let here = picker.current.clone();
+                                for (label, path) in places(&home) {
+                                    let current = path == here;
+                                    if ui
+                                        .selectable_label(
+                                            current,
+                                            egui::RichText::new(label)
+                                                .strong()
+                                                .color(if current {
+                                                    accent()
+                                                } else {
+                                                    ui.visuals().text_color()
+                                                }),
+                                        )
+                                        .clicked()
+                                    {
+                                        picker.enter(path);
+                                    }
+                                }
+                                if !volumes.is_empty() {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new("VOLUMES").size(10.5).color(muted()),
+                                    );
+                                    for volume in &volumes {
+                                        let name = volume
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .into_owned();
+                                        let current = *volume == here;
+                                        let label = egui::RichText::new(name)
+                                            .color(if current { accent() } else { ui.visuals().text_color() });
+                                        let response = ui
+                                            .selectable_label(current, label)
+                                            .on_hover_text(volume.display().to_string());
+                                        if response.clicked() {
+                                            picker.enter(volume.clone());
+                                        }
+                                    }
+                                }
+                            });
+                    },
+                );
+                ui.add_space(6.0);
+
+                // The folder being looked at.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), body),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(picker.current.display().to_string())
+                                    .size(12.0)
+                                    .strong(),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        let listing = ui.available_height() - 40.0;
+                        egui::ScrollArea::vertical()
+                            .id_salt("picker_listing")
+                            .auto_shrink([false, false])
+                            .max_height(listing.max(120.0))
+                            .show(ui, |ui| {
+                                if ui.selectable_label(false, ".. (up one level)").clicked() {
+                                    picker.go_up(&home);
+                                    return;
+                                }
+                                let dirs = subdirectories(&picker.current);
+                                if dirs.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("No subfolders here")
+                                            .size(12.0)
+                                            .color(muted()),
+                                    );
+                                }
+                                for dir in dirs {
+                                    let name = dir
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .into_owned();
+                                    if ui.selectable_label(false, format!("{name}/")).clicked() {
+                                        picker.enter(dir);
+                                    }
+                                }
+                            });
+                    },
+                );
+            });
 
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Use this folder").clicked() {
-                    chosen = true;
-                }
-                if ui.button("Cancel").clicked() {
-                    cancelled = true;
-                }
-                ui.label(
-                    egui::RichText::new(picker.current.display().to_string())
-                        .size(11.0)
-                        .color(accent()),
+                ui.add(
+                    egui::TextEdit::singleline(&mut picker.new_folder)
+                        .hint_text("new folder name")
+                        .desired_width(160.0),
                 );
+                if ui.button("Create").clicked() {
+                    let name = picker.new_folder.trim().to_string();
+                    if name.is_empty() {
+                        error = Some("Give the new folder a name".into());
+                    } else {
+                        let candidate = picker.current.join(&name);
+                        match std::fs::create_dir(&candidate) {
+                            Ok(()) => {
+                                picker.new_folder.clear();
+                                picker.enter(candidate);
+                            }
+                            Err(problem) => {
+                                error = Some(format!("{problem}"));
+                            }
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancelled = true;
+                    }
+                    if ui.button("Use this folder").clicked() {
+                        chosen = true;
+                    }
+                });
             });
+            if let Some(problem) = &error {
+                ui.colored_label(egui::Color32::from_rgb(0xE0, 0x70, 0x70), problem);
+            }
         });
 
     if cancelled {
@@ -269,6 +482,102 @@ mod tests {
     }
 
     #[test]
+    fn volumes_are_the_mounts_you_would_want_to_download_to() {
+        // A real /proc/mounts from a KDE box with two USB sticks.
+        let mounts = "\
+sysfs /sys sysfs rw 0 0
+proc /proc proc rw 0 0
+/dev/sda2 / btrfs rw 0 0
+/dev/sda2 /home btrfs rw 0 0
+/dev/sda2 /var/cache btrfs rw 0 0
+/dev/sda2 /home/me/.local/share/Steam btrfs rw 0 0
+/dev/sda2 /home/me/sync ext4 rw 0 0
+/dev/sdb1 /run/media/me/MAINLINUX ext4 rw 0 0
+/dev/sdc1 /run/media/me/WD1 ntfs3 rw 0 0
+/dev/sdd1 /mnt/backup ext4 rw 0 0
+/dev/sdb2 /run/media/me/WD1/SteamLibrary ext4 rw 0 0
+tmpfs /run/user/1000 tmpfs rw 0 0
+/dev/sde1 /media/photo ext4 rw 0 0
+";
+        assert_eq!(
+            parse_mounts(mounts),
+            vec![
+                PathBuf::from("/run/media/me/MAINLINUX"),
+                PathBuf::from("/run/media/me/WD1"),
+                PathBuf::from("/mnt/backup"),
+                PathBuf::from("/media/photo"),
+            ],
+            "removable volumes and /mnt, but no btrfs subvolumes, no pseudo \
+             filesystems, and nothing nested inside a volume we already list"
+        );
+    }
+
+    #[test]
+    fn nested_mounts_do_not_clutter_the_list() {
+        let mounts = "\
+/dev/sdb1 /run/media/me/WD1 ext4 rw 0 0
+/dev/sdb2 /run/media/me/WD1/SteamLibrary/steamapps ext4 rw 0 0
+/dev/sdb3 /run/media/me/WD1/SteamLibrary/steamapps/compatdata ext4 rw 0 0
+/dev/nvme0p2 / btrfs rw 0 0
+";
+        assert_eq!(
+            parse_mounts(mounts),
+            vec![PathBuf::from("/run/media/me/WD1")],
+            "the stick is listed once, not four times"
+        );
+    }
+
+    #[test]
+    fn a_duplicated_mount_is_listed_once() {
+        let mounts = "\
+/dev/sda1 /media/one ext4 rw 0 0
+/dev/sda2 /media/one ext4 rw 0 0
+";
+        assert_eq!(parse_mounts(mounts), vec![PathBuf::from("/media/one")]);
+    }
+
+    #[test]
+    fn rubbish_mount_lines_are_skipped() {
+        assert!(parse_mounts("").is_empty());
+        assert!(parse_mounts("nonsense\n/dev/sda1\n").is_empty());
+        assert!(parse_mounts("/dev/sda1 relative-target ext4 rw 0 0").is_empty());
+    }
+
+    #[test]
+    fn places_include_home_and_the_filesystem_root() {
+        let root = scratch("places");
+        let home = root.join("me");
+        std::fs::create_dir_all(home.join("Videos")).unwrap();
+        let labels: Vec<&str> = places(&home).iter().map(|(label, _)| *label).collect();
+        assert!(labels.contains(&"Home"));
+        assert!(labels.contains(&"Videos"), "an existing shortcut shows");
+        assert!(!labels.contains(&"Music"), "one that does not exist is left out");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Opt-in check that the volumes on *this* machine are the ones offered.
+    /// Run with: `cargo test -- --ignored --nocapture live_volumes`
+    #[test]
+    #[ignore = "depends on what is actually mounted"]
+    fn live_volumes_are_offered() {
+        let found = volumes();
+        println!("volumes offered: {found:?}");
+        for known in ["/mnt", "/run/media", "/media"] {
+            let root = Path::new(known);
+            if !root.is_dir() {
+                continue;
+            }
+            // Either the mount point itself, or something mounted inside it.
+            let covered = found.iter().any(|volume| {
+                volume == root || root.ancestors().any(|a| a == volume.as_path())
+            }) || subdirectories(root).iter().any(|sub| {
+                sub.starts_with("/run/media") || sub.starts_with("/mnt") || sub.starts_with("/media")
+            });
+            assert!(covered, "{known} exists but nothing leads there: {found:?}");
+        }
+    }
+
+    #[test]
     fn the_typed_path_wins_when_it_is_a_real_folder() {
         let root = scratch("selection");
         let other = root.join("other");
@@ -276,6 +585,7 @@ mod tests {
         let picker = FolderPicker {
             current: root.clone(),
             typed: other.display().to_string(),
+            new_folder: String::new(),
         };
         assert_eq!(picker.selection(), other);
 
@@ -283,6 +593,7 @@ mod tests {
         let picker = FolderPicker {
             current: root.clone(),
             typed: "/nope/nowhere".into(),
+            new_folder: String::new(),
         };
         assert_eq!(picker.selection(), root);
         let _ = std::fs::remove_dir_all(&root);
