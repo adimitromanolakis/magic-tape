@@ -159,6 +159,16 @@ red toast per card, which buried the UI.
 its content width and the bar is drawn inset from the panel edge instead of at it; the sidebar's
 two were the only ones missing it.
 
+**Icons** — `ui::icons` resolves names through the freedesktop layout: the user's
+theme, then `Inherits=` from `index.theme`, then `hicolor`, Adwaita and
+AdwaitaLegacy as toolkits do. Two details cost a bug each: the context list has
+to include `devices`, `legacy` and `symbolic/actions` (drives and symbolic icons
+live there, and Adwaita's symbolic files have no size directory at all), and a
+Qt theme like Qogir inherits nothing from Adwaita, so GTK-only names such as
+`go-up` are only reachable through the explicit fallbacks. Names are asked for
+as short chains (`go-up`, then `go-previous`), because a theme that ships
+neither must not produce a blank row.
+
 **Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
 frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
 request (`tasks.rs` keeps one in a `OnceLock` for all workers).
@@ -340,6 +350,7 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
 | Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |
 | Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |

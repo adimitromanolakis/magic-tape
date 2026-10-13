@@ -25,6 +25,16 @@ cargo build --release
 ./target/release/magic-tape
 ```
 
+## Icons
+
+Icons in the folder chooser come from your own desktop icon theme, resolved
+the way a toolkit does it: `XDG_ICON_THEME`, then `gtk-icon-theme-name` from
+your GTK settings, then Adwaita, then `hicolor`. Both SVG and PNG are read, and
+names are tried in a short chain, because `go-up` is a GTK name that other
+toolkits call `go-previous`. A theme with no `index.theme`, or one that does
+not inherit from Adwaita, still gets GTK-only icons from the fallbacks. When a
+name really is nowhere to be found, the row draws its text and nothing else.
+
 ## Fonts and scale
 
 Settings → General → Appearance. The font list is built from the fonts installed on the machine

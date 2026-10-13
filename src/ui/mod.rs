@@ -1,5 +1,6 @@
 pub mod detail;
 pub mod folder_picker;
+pub mod icons;
 pub mod settings;
 pub mod sidebar;
 pub mod toasts;

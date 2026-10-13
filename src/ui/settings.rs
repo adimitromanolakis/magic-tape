@@ -291,11 +291,6 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
             "That folder does not exist yet - it will be created on the first download.",
         );
     }
-    for suggestion in ["/tmp/magic-tape", "/mnt", "/tmp"] {
-        if ui.small_button(format!("use {suggestion}")).clicked() {
-            app.config.download_directory = suggestion.to_string();
-        }
-    }
     ui.checkbox(&mut app.config.show_mpv_keybindings, "Show mpv keybindings in the help panel");
     ui.add_space(8.0);
 

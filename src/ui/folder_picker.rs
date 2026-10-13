@@ -185,22 +185,63 @@ pub fn volumes() -> Vec<PathBuf> {
 
 /// The standard shortcuts down the side of a traditional chooser, skipping
 /// any that do not exist.
-pub fn places(home: &Path) -> Vec<(&'static str, PathBuf)> {
-    let candidates: [(&'static str, PathBuf); 9] = [
-        ("Home", home.to_path_buf()),
-        ("Desktop", home.join("Desktop")),
-        ("Downloads", home.join("Downloads")),
-        ("Documents", home.join("Documents")),
-        ("Videos", home.join("Videos")),
-        ("Music", home.join("Music")),
-        ("Pictures", home.join("Pictures")),
-        ("Home folder", PathBuf::from("/")),
-        ("tmp", PathBuf::from("/tmp")),
+pub fn places(home: &Path) -> Vec<(&'static str, &'static [&'static str], PathBuf)> {
+    // The names are the freedesktop ones, so the user's own theme supplies
+    // the pictures rather than anything shipped with the app.
+    let candidates: [(&str, &[&str], PathBuf); 9] = [
+        ("Home", &["user-home"][..], home.to_path_buf()),
+        ("Desktop", &["user-desktop"][..], home.join("Desktop")),
+        ("Downloads", &["folder-downloads", "folder-download"][..], home.join("Downloads")),
+        ("Documents", &["folder-documents"][..], home.join("Documents")),
+        ("Videos", &["folder-videos"][..], home.join("Videos")),
+        ("Music", &["folder-music"][..], home.join("Music")),
+        ("Pictures", &["folder-pictures"][..], home.join("Pictures")),
+        ("Home folder", &["filesystem", "drive-harddisk"][..], PathBuf::from("/")),
+        ("tmp", &["folder"][..], PathBuf::from("/tmp")),
     ];
     candidates
         .into_iter()
-        .filter(|(_, path)| path.is_dir())
+        .filter(|(_, _, path)| path.is_dir())
         .collect()
+}
+
+/// Edge length of the system icons, in points.
+const ICON_PX: u32 = 16;
+
+/// A button carrying a system icon, degrading to plain text when the theme has
+/// nothing by that name.
+fn icon_button_label<'a>(
+    app: &mut App,
+    ctx: &egui::Context,
+    icons: &[&str],
+    text: &'a str,
+) -> egui::Button<'a> {
+    let image = app.icons.first_of(ctx, icons, ICON_PX).map(|texture| {
+        let size = egui::vec2(ICON_PX as f32, ICON_PX as f32);
+        egui::Image::new(egui::load::SizedTexture::from_handle(&texture))
+            .max_size(size)
+    });
+    egui::Button::opt_image_and_text(image, Some(text.into()))
+}
+
+/// A selectable row with a system icon, falling back to plain text when the
+/// theme has nothing by that name.
+fn icon_button(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    icons: &[&str],
+    text: egui::RichText,
+    selected: bool,
+) -> egui::Response {
+    let Some(texture) = app.icons.first_of(ui.ctx(), icons, ICON_PX) else {
+        return ui.selectable_label(selected, text);
+    };
+    ui.horizontal(|ui| {
+        let size = egui::vec2(ICON_PX as f32, ICON_PX as f32);
+        ui.add(egui::Image::new(egui::load::SizedTexture::from_handle(&texture)).max_size(size));
+        ui.selectable_label(selected, text)
+    })
+    .inner
 }
 
 /// Renders the picker, and writes the answer back into the config.
@@ -259,21 +300,12 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 let here = picker.current.clone();
-                                for (label, path) in places(&home) {
+                                for (label, icons, path) in places(&home) {
                                     let current = path == here;
-                                    if ui
-                                        .selectable_label(
-                                            current,
-                                            egui::RichText::new(label)
-                                                .strong()
-                                                .color(if current {
-                                                    accent()
-                                                } else {
-                                                    ui.visuals().text_color()
-                                                }),
-                                        )
-                                        .clicked()
-                                    {
+                                    let text = egui::RichText::new(label).strong().color(
+                                        if current { accent() } else { ui.visuals().text_color() },
+                                    );
+                                    if icon_button(ui, app, icons, text, current).clicked() {
                                         picker.enter(path);
                                     }
                                 }
@@ -289,11 +321,17 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                                             .to_string_lossy()
                                             .into_owned();
                                         let current = *volume == here;
-                                        let label = egui::RichText::new(name)
-                                            .color(if current { accent() } else { ui.visuals().text_color() });
-                                        let response = ui
-                                            .selectable_label(current, label)
-                                            .on_hover_text(volume.display().to_string());
+                                        let label = egui::RichText::new(name).color(
+                                            if current { accent() } else { ui.visuals().text_color() },
+                                        );
+                                        let response = icon_button(
+                                            ui,
+                                            app,
+                                            &["drive-harddisk", "drive-removable-media", "folder"],
+                                            label,
+                                            current,
+                                        )
+                                        .on_hover_text(volume.display().to_string());
                                         if response.clicked() {
                                             picker.enter(volume.clone());
                                         }
@@ -323,7 +361,15 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                             .auto_shrink([false, false])
                             .max_height(listing.max(120.0))
                             .show(ui, |ui| {
-                                if ui.selectable_label(false, ".. (up one level)").clicked() {
+                                if icon_button(
+                                    ui,
+                                    app,
+                                    &["go-up", "go-previous"],
+                                    egui::RichText::new(".. (up one level)"),
+                                    false,
+                                )
+                                .clicked()
+                                {
                                     picker.go_up(&home);
                                     return;
                                 }
@@ -341,7 +387,15 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                                         .unwrap_or_default()
                                         .to_string_lossy()
                                         .into_owned();
-                                    if ui.selectable_label(false, format!("{name}/")).clicked() {
+                                    if icon_button(
+                                        ui,
+                                        app,
+                                        &["folder"],
+                                        egui::RichText::new(format!("{name}/")),
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
                                         picker.enter(dir);
                                     }
                                 }
@@ -357,7 +411,15 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                         .hint_text("new folder name")
                         .desired_width(160.0),
                 );
-                if ui.button("Create").clicked() {
+                if ui
+                    .add(icon_button_label(
+                        app,
+                        ui.ctx(),
+                        &["folder-new", "folder", "list-add"],
+                        "Create",
+                    ))
+                    .clicked()
+                {
                     let name = picker.new_folder.trim().to_string();
                     if name.is_empty() {
                         error = Some("Give the new folder a name".into());
@@ -375,10 +437,24 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui
+                        .add(icon_button_label(
+                            app,
+                            ui.ctx(),
+                            &["window-close-symbolic", "dialog-cancel"],
+                            "Cancel",
+                        ))
+                        .clicked()
+                    {
                         cancelled = true;
                     }
-                    if ui.button("Use this folder").clicked() {
+                    let use_it = icon_button_label(
+                        app,
+                        ui.ctx(),
+                        &["object-select-symbolic", "dialog-ok", "emblem-ok-symbolic"],
+                        "Use this folder",
+                    );
+                    if ui.add(use_it).clicked() {
                         chosen = true;
                     }
                 });
@@ -548,7 +624,7 @@ tmpfs /run/user/1000 tmpfs rw 0 0
         let root = scratch("places");
         let home = root.join("me");
         std::fs::create_dir_all(home.join("Videos")).unwrap();
-        let labels: Vec<&str> = places(&home).iter().map(|(label, _)| *label).collect();
+        let labels: Vec<&str> = places(&home).iter().map(|(label, _, _)| *label).collect();
         assert!(labels.contains(&"Home"));
         assert!(labels.contains(&"Videos"), "an existing shortcut shows");
         assert!(!labels.contains(&"Music"), "one that does not exist is left out");

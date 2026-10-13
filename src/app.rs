@@ -71,6 +71,7 @@ pub struct App {
     pub player: Player,
     pub worker: Worker,
     pub thumbs: ThumbCache,
+    pub icons: crate::ui::icons::IconTheme,
 
     pub section: Section,
     pub feed: Feed,
@@ -153,6 +154,7 @@ impl App {
             player,
             worker: Worker::new(),
             thumbs: ThumbCache::new(ctx),
+            icons: crate::ui::icons::IconTheme::new(ctx),
             section: Section::Feeds,
             feed: startup.feed.unwrap_or(Feed::Subscriptions),
             feed_before_search: Feed::Subscriptions,
