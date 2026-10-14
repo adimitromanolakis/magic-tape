@@ -56,6 +56,13 @@ text the app paints itself.
 | `l` · `s` · `b` · `c` | like, subscribe, open in browser, copy link |
 | `r` · `Ctrl+F` · `Ctrl+,` · `Ctrl+Q` | refresh, search, settings, quit |
 
+## Comments
+
+Comments load when you settle on a video: one yt-dlp run at a time, ever. A
+fast pan through the grid costs the run already in flight plus, at most, the
+video you stopped on - requests for videos you have already passed are dropped,
+and already-cached comments are never fetched twice.
+
 ## Downloads
 
 The download folder accepts absolute paths, which is what you want for a separate disk or a

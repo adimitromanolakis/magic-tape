@@ -1199,7 +1199,19 @@ impl App {
 }
 
     /// How long the selection must hold still before comments are fetched.
-pub const COMMENTS_DEBOUNCE: Duration = Duration::from_millis(450);
+///
+/// This used to be 450ms, and it was doing a job that no longer belongs to it.
+/// The delay stood in for the missing concurrency limit: every selection change
+/// used to start a yt-dlp run, so the only defence was to wait and hope the
+/// user stopped moving. There is now a hard one-in-flight limit and the newest
+/// request wins, so a fast pan costs at most the running fetch plus the one it
+/// stopped on - no timer needed for that.
+///
+/// What is left is only to absorb a burst of keystrokes: a held PageDown
+/// changes the selection every frame, and 50ms (three frames) collapses that
+/// into one request while staying below the threshold where a deliberate click
+/// feels delayed.
+pub const COMMENTS_DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Whether a settled selection is old enough to fetch comments for.
 ///
@@ -1226,6 +1238,11 @@ pub fn video_key(url: &str) -> String {
     }
 }
 
+/// Whether a queued comment fetch is due.
+///
+/// Being due is not the same as starting one: `pump_comments` still refuses
+/// while another fetch is running. This only answers "has the selection been
+/// still long enough to be worth asking for".
 pub fn comments_should_start(settled_for: Duration) -> bool {
     settled_for >= COMMENTS_DEBOUNCE
 }
@@ -1277,15 +1294,9 @@ pub fn entry_to_video(entry: &crate::store::HistoryEntry) -> Video {
 mod tests {
     use super::*;
 
-    #[test]
-    fn paging_fast_never_queues_more_than_one_fetch() {
-        // What the user saw: paging spawned a yt-dlp run per video, and three
-        // for one video.
-        let ctx = egui::Context::default();
-        let mut app = App::new(&ctx, Startup::default());
-        app.config.show_comments = false; // keep the cache path out of it
-
-        let video = |id: &str| Video {
+    /// A stand-in video. Real ones would make a test shell out to yt-dlp.
+    fn fake_video(id: &str) -> Video {
+        Video {
             id: id.to_string(),
             title: id.into(),
             url: format!("https://www.youtube.com/watch?v={id}"),
@@ -1297,19 +1308,84 @@ mod tests {
             published: None,
             is_live: false,
             is_upcoming: false,
-        };
+        }
+    }
+
+    #[test]
+    fn a_finished_fetch_queues_only_what_is_still_on_screen() {
+        // A pan that outruns the running fetch: the request queued for the
+        // video the user has already left is dropped, and the one they stopped
+        // on is queued instead - so the short delay is what holds the next
+        // spawn, not a long wait.
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.config.show_comments = true;
+        app.feed_state.videos = (0..20).map(|n| fake_video(&format!("id{n:010}"))).collect();
+        app.selected = Some(10);
+        let current = app.current_video().unwrap();
+
+        // Something is already running, for a video two pages back.
+        let stale = app.feed_state.videos[0].clone();
+        app.comments_inflight = Some(InflightComments {
+            key: video_key(&stale.url),
+            url: stale.url.clone(),
+        });
+        app.comments_wanted = Some(app.feed_state.videos[3].clone());
+
+        app.finish_comment_fetch(&stale.url);
+
+        assert!(app.comments_inflight.is_none(), "the slot is released");
+        assert_eq!(
+            app.comments_pending.as_deref(),
+            Some(current.url.as_str()),
+            "the video on screen is queued, not the one passed over"
+        );
+        assert!(
+            !comments_should_start(Duration::ZERO),
+            "and it waits the short settle, so this test spawns nothing"
+        );
+    }
+
+    #[test]
+    fn the_settle_delay_is_short_enough_to_feel_immediate() {
+        // 450ms stood in for the concurrency limit that now exists. All that is
+        // left is collapsing a burst of keystrokes, so the delay must stay
+        // below the point where a click feels like it did nothing.
+        assert!(
+            COMMENTS_DEBOUNCE <= Duration::from_millis(50),
+            "the settle delay crept back up to {}",
+            COMMENTS_DEBOUNCE.as_millis()
+        );
+        assert!(
+            !comments_should_start(Duration::from_millis(10)),
+            "still moving"
+        );
+        assert!(
+            comments_should_start(COMMENTS_DEBOUNCE),
+            "due once the selection has settled"
+        );
+        assert!(comments_should_start(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn paging_fast_never_queues_more_than_one_fetch() {
+        // What the user saw: paging spawned a yt-dlp run per video, and three
+        // for one video.
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.config.show_comments = false; // keep the cache path out of it
 
         // First one starts.
-        app.load_comments_for(video("aaaaaaaaaaa"));
+        app.load_comments_for(fake_video("aaaaaaaaaaa"));
         assert!(app.comments_inflight.is_some(), "the first request runs");
 
         // Everything after it is refused while that runs...
-        app.load_comments_for(video("bbbbbbbbbbb"));
+        app.load_comments_for(fake_video("bbbbbbbbbbb"));
         assert_eq!(app.comments_wanted.as_ref().map(|v| v.id.as_str()), Some("bbbbbbbbbbb"));
         assert_eq!(app.comments_inflight.as_ref().map(|f| f.key.clone()), Some("aaaaaaaaaaa".into()));
 
         // ...including the very same video under a different URL spelling.
-        let mut same = video("aaaaaaaaaaa");
+        let mut same = fake_video("aaaaaaaaaaa");
         same.url = "https://youtu.be/aaaaaaaaaaa".into();
         app.load_comments_for(same.clone());
         assert_eq!(
@@ -1320,7 +1396,7 @@ mod tests {
 
         // Only the newest request survives: it replaces the last, it does not
         // accumulate.
-        app.load_comments_for(video("ccccccccccc"));
+        app.load_comments_for(fake_video("ccccccccccc"));
         assert_eq!(app.comments_wanted.as_ref().map(|v| v.id.as_str()), Some("ccccccccccc"));
         assert_eq!(app.comments_inflight.as_ref().map(|f| f.key.clone()), Some("aaaaaaaaaaa".into()));
         assert_eq!(

@@ -176,6 +176,19 @@ is a count of *rows*, and using it directly as an item delta moved 19 items acro
 `columns` is 1, which must be set explicitly on every path that pages, since paging
 multiplies by it and the grid leaves its value behind.
 
+**Comment fetching** — bounded by a single slot, not by a timer. The 450ms settle
+was standing in for the concurrency limit; with one-in-flight and newest-request-wins
+in place it only has to collapse a burst of keystrokes, so it is 50ms. Two lessons
+worth keeping: keying the in-flight guard on URL *text* let the same video run three
+times (`watch?v=id`, `youtu.be/id`, tracking parameters), and a debounce that looks
+like the fix for "too many processes" will hide a missing limit - check which one is
+actually doing the work.
+
+**The comment debounce** — the 450ms settle was standing in for a concurrency limit that now
+exists. With one fetch in flight and the newest request winning, a fast pan costs the run already
+going plus at most the video you stopped on, so the timer only has to collapse a burst of
+keystrokes: 50ms. A test fails if it ever creeps back above that.
+
 **Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
 frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
 request (`tasks.rs` keeps one in a `OnceLock` for all workers).
@@ -359,6 +372,7 @@ allowed through it, action commands are not.
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
+| Comment fetching | `the_settle_delay_is_short_enough_to_feel_immediate`, `a_finished_fetch_queues_only_what_is_still_on_screen`, `paging_fast_never_queues_more_than_one_fetch`, `only_one_comment_fetch_is_ever_in_flight`, `a_video_is_identified_by_its_id_not_its_url` |
 | Paging moves whole rows | `a_page_is_a_screenful_of_rows`, `paging_in_a_grid_moves_rows_not_items`, `paging_in_the_list_moves_one_row_per_item`, `paging_clamps_at_both_ends`, `paging_from_a_partial_last_row_stays_on_it` |
 | Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |
 | Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |
