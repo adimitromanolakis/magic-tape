@@ -44,6 +44,16 @@ pub struct Detail {
     pub error: Option<String>,
 }
 
+/// The comment fetch currently running.
+#[derive(Debug, Clone)]
+pub struct InflightComments {
+    /// Video id, so the same video cannot be fetched twice under two URL
+    /// spellings - which is exactly what happened: three yt-dlp processes
+    /// writing to the same output file.
+    pub key: String,
+    pub url: String,
+}
+
 pub struct FeedState {
     pub videos: Vec<Video>,
     pub start: usize,
@@ -112,6 +122,16 @@ pub struct App {
     pub visible_rows: usize,
     pub scroll_to_index: Option<usize>,
     pub pending_select: Option<usize>,
+    /// Comment fetch waiting for the selection to settle.
+    comments_pending: Option<String>,
+    comments_settled_at: Option<Instant>,
+    /// Urls currently being fetched, so one video is never fetched twice at
+    /// once.
+    /// The one comment fetch allowed to run at a time, if any.
+    comments_inflight: Option<InflightComments>,
+    /// The newest selection made while that fetch was running. Only this one
+    /// is kept: paging past twenty videos must not queue twenty fetches.
+    comments_wanted: Option<Video>,
 }
 
 pub struct Toast {
@@ -190,6 +210,10 @@ impl App {
             visible_rows: 0,
             scroll_to_index: None,
             pending_select: None,
+            comments_pending: None,
+            comments_settled_at: None,
+            comments_inflight: None,
+            comments_wanted: None,
         }
     }
 
@@ -379,6 +403,21 @@ impl App {
     }
 
     pub fn load_comments_for(&mut self, video: Video) {
+        let key = video_key(&video.url);
+        if let Some(running) = &self.comments_inflight {
+            if running.key == key {
+                return;
+            }
+            // One at a time, app-wide. Hold on to the newest request and drop
+            // whatever it supersedes.
+            self.comments_wanted = Some(video);
+            return;
+        }
+        // Claimed here so the outcome that comes back can always release it.
+        self.comments_inflight = Some(InflightComments {
+            key,
+            url: video.url.clone(),
+        });
         let config = self.config.clone();
         let yt = self.yt.clone();
         let comments_dir = self.paths.comments_dir.clone();
@@ -404,8 +443,8 @@ impl App {
                         count,
                         pinned_first,
                     },
-                    Err(error) => Outcome::Failed {
-                        label: "loading comments".into(),
+                    Err(error) => Outcome::CommentsFailed {
+                        url,
                         error: error.to_string(),
                     },
                 }
@@ -559,12 +598,100 @@ impl App {
         }
         self.selected = index;
         self.detail = Default::default();
+        self.comments_pending = None;
+        self.comments_settled_at = None;
         if let Some(video) = self.current_video() {
             self.ensure_thumbnail(&video);
-            if self.config.show_comments {
-                self.load_comments_for(video);
+            self.queue_comments_for(&video);
+        }
+    }
+
+    /// Decides what to do about the selected video's comments.
+    ///
+    /// Cache first, then never fetch what is already being fetched, and
+    /// otherwise *wait*: a page key changes the selection several times a
+    /// second and each change used to start a yt-dlp run.
+    fn queue_comments_for(&mut self, video: &Video) {
+        if !self.config.show_comments {
+            return;
+        }
+        let url = video.url.clone();
+        if let Some((description, comments, comment_count)) =
+            YtDlp::comments_from_cache(&url, &self.paths.comments_dir)
+        {
+            self.detail.video = Some(video.clone());
+            self.detail.description = description;
+            self.detail.comments = comments;
+            self.detail.comment_count = comment_count;
+            self.comments_pending = None;
+            return;
+        }
+        if self.comments_in_flight_for(&url) {
+            return;
+        }
+        self.comments_pending = Some(url);
+        self.comments_settled_at = Some(Instant::now());
+    }
+
+    /// Whether a fetch for this video is running, matched on video id.
+    fn comments_in_flight_for(&self, url: &str) -> bool {
+        let key = video_key(url);
+        self.comments_inflight
+            .as_ref()
+            .is_some_and(|running| running.key == key)
+    }
+
+    /// Releases the single-flight slot and starts the newest queued request.
+    fn finish_comment_fetch(&mut self, url: &str) {
+        let matches = self
+            .comments_inflight
+            .as_ref()
+            .is_some_and(|running| running.url == url);
+        if matches {
+            self.comments_inflight = None;
+            self.detail.loading = false;
+        }
+        if let Some(wanted) = self.comments_wanted.take() {
+            // Only if it is still the one on screen: the user may have moved
+            // on again while this was running.
+            if self.current_video().is_some_and(|current| current.url == wanted.url) {
+                self.load_comments_for(wanted);
+            } else {
+                self.queue_comments_for_current();
             }
         }
+    }
+
+    fn queue_comments_for_current(&mut self) {
+        if let Some(video) = self.current_video() {
+            self.queue_comments_for(&video);
+        }
+    }
+
+    /// Starts the queued comment fetch once the selection has stopped moving.
+    pub fn pump_comments(&mut self) {
+        let Some(url) = self.comments_pending.clone() else {
+            return;
+        };
+        if self.comments_in_flight_for(&url) {
+            self.comments_pending = None;
+            return;
+        }
+        let settled = self
+            .comments_settled_at
+            .map(|at| comments_should_start(at.elapsed()))
+            .unwrap_or(false);
+        if !settled {
+            return;
+        }
+        self.comments_pending = None;
+        let Some(video) = self.current_video() else {
+            return;
+        };
+        if video.url != url {
+            return;
+        }
+        self.load_comments_for(video);
     }
 
     pub fn start_search(&mut self, term: &str) {
@@ -617,7 +744,7 @@ impl App {
         Some(self.feed)
     }
 
-    /// How many *rows* PageUp/PageDown move: one screenful, minus a row so
+/// How many *rows* PageUp/PageDown move: one screenful, minus a row so
     /// the row just left behind stays visible and the jump reads as movement
     /// rather than a cut.
     pub fn page_rows(visible_rows: usize) -> usize {
@@ -975,6 +1102,17 @@ impl App {
                     self.open_file_in_explorer(&backup);
                 }
             }
+            Outcome::CommentsFailed { url, error } => {
+                self.finish_comment_fetch(&url);
+                if self
+                    .detail
+                    .video
+                    .as_ref()
+                    .is_some_and(|video| video.url == url)
+                {
+                    self.detail.error = Some(error);
+                }
+            }
             Outcome::CommentsLoaded {
                 url,
                 description,
@@ -982,6 +1120,11 @@ impl App {
                 count,
                 pinned_first,
             } => {
+                let was_running = self
+                    .comments_inflight
+                    .as_ref()
+                    .is_some_and(|running| running.url == url);
+                self.finish_comment_fetch(&url);
                 let matches = self
                     .detail
                     .video
@@ -995,6 +1138,7 @@ impl App {
                     self.detail.loading = false;
                     self.detail.error = None;
                 }
+                let _ = was_running;
                 let _ = pinned_first;
             }
             Outcome::DownloadFinished { title, audio_only } => {
@@ -1054,6 +1198,38 @@ impl App {
     }
 }
 
+    /// How long the selection must hold still before comments are fetched.
+pub const COMMENTS_DEBOUNCE: Duration = Duration::from_millis(450);
+
+/// Whether a settled selection is old enough to fetch comments for.
+///
+/// Arrowing through the grid changes the selection many times a second; a
+/// comment fetch is a yt-dlp process. Waiting for the movement to stop means
+/// paging costs nothing and only the video you stopped on is fetched.
+/// The identity of a video, for deciding whether it is already being fetched.
+///
+/// URL text is not it: the same video arrives as `watch?v=id`, as `youtu.be/id`
+/// and with tracking parameters, and three spellings meant three processes
+/// writing to one output file.
+pub fn video_key(url: &str) -> String {
+    let id = url
+        .split(['?', '&'])
+        .find_map(|part| part.strip_prefix("v="))
+        .or_else(|| {
+            url.split("youtu.be/")
+                .nth(1)
+                .map(|rest| rest.split(['?', '&']).next().unwrap_or(rest))
+        });
+    match id.filter(|id| !id.is_empty()) {
+        Some(id) => id.to_string(),
+        None => url.to_string(),
+    }
+}
+
+pub fn comments_should_start(settled_for: Duration) -> bool {
+    settled_for >= COMMENTS_DEBOUNCE
+}
+
 fn feed_label(feed: Feed) -> &'static str {
     match feed {
         Feed::Subscriptions => "subscriptions",
@@ -1100,6 +1276,94 @@ pub fn entry_to_video(entry: &crate::store::HistoryEntry) -> Video {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paging_fast_never_queues_more_than_one_fetch() {
+        // What the user saw: paging spawned a yt-dlp run per video, and three
+        // for one video.
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.config.show_comments = false; // keep the cache path out of it
+
+        let video = |id: &str| Video {
+            id: id.to_string(),
+            title: id.into(),
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            channel_id: "UC1".into(),
+            channel: "Chan".into(),
+            duration: None,
+            views: None,
+            thumbnail: None,
+            published: None,
+            is_live: false,
+            is_upcoming: false,
+        };
+
+        // First one starts.
+        app.load_comments_for(video("aaaaaaaaaaa"));
+        assert!(app.comments_inflight.is_some(), "the first request runs");
+
+        // Everything after it is refused while that runs...
+        app.load_comments_for(video("bbbbbbbbbbb"));
+        assert_eq!(app.comments_wanted.as_ref().map(|v| v.id.as_str()), Some("bbbbbbbbbbb"));
+        assert_eq!(app.comments_inflight.as_ref().map(|f| f.key.clone()), Some("aaaaaaaaaaa".into()));
+
+        // ...including the very same video under a different URL spelling.
+        let mut same = video("aaaaaaaaaaa");
+        same.url = "https://youtu.be/aaaaaaaaaaa".into();
+        app.load_comments_for(same.clone());
+        assert_eq!(
+            app.comments_wanted.as_ref().map(|v| v.id.as_str()),
+            Some("bbbbbbbbbbb"),
+            "a second fetch of the running video must not even be queued"
+        );
+
+        // Only the newest request survives: it replaces the last, it does not
+        // accumulate.
+        app.load_comments_for(video("ccccccccccc"));
+        assert_eq!(app.comments_wanted.as_ref().map(|v| v.id.as_str()), Some("ccccccccccc"));
+        assert_eq!(app.comments_inflight.as_ref().map(|f| f.key.clone()), Some("aaaaaaaaaaa".into()));
+        assert_eq!(
+            app.comments_inflight.as_ref().map(|r| r.url.as_str()),
+            Some("https://www.youtube.com/watch?v=aaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn only_one_comment_fetch_is_ever_in_flight() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        assert!(app.comments_inflight.is_none());
+        assert!(!app.comments_in_flight_for("https://youtu.be/abc"));
+        app.comments_inflight = Some(InflightComments {
+            key: video_key("https://www.youtube.com/watch?v=abc"),
+            url: "https://www.youtube.com/watch?v=abc".into(),
+        });
+        assert!(app.comments_in_flight_for("https://www.youtube.com/watch?v=abc"));
+        assert!(
+            app.comments_in_flight_for("https://youtu.be/abc"),
+            "same video, different URL: still in flight"
+        );
+        assert!(!app.comments_in_flight_for("https://youtu.be/different"));
+    }
+
+    #[test]
+    fn a_video_is_identified_by_its_id_not_its_url() {
+        // The three spellings that produced three concurrent yt-dlp runs
+        // writing to one output file.
+        let key = video_key("https://www.youtube.com/watch?v=bFejmp9yuGo");
+        assert_eq!(key, "bFejmp9yuGo");
+        assert_eq!(video_key("https://youtu.be/bFejmp9yuGo"), key);
+        assert_eq!(video_key("https://www.youtube.com/watch?v=bFejmp9yuGo&t=42s"), key);
+        assert_eq!(
+            video_key("https://www.youtube.com/watch?feature=share&v=bFejmp9yuGo"),
+            key
+        );
+        assert_ne!(video_key("https://youtu.be/other"), key);
+        // Nonsense falls back to the whole URL rather than an empty key,
+        // which would make every unknown URL look like the same video.
+        assert_eq!(video_key("https://example.com/x"), "https://example.com/x");
+    }
 
     #[test]
     fn a_page_is_a_screenful_of_rows() {

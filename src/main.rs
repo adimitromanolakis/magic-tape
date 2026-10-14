@@ -130,6 +130,7 @@ impl eframe::App for MagicTape {
             self.app.handle_outcome(outcome);
         }
         self.app.prune_toasts();
+        self.app.pump_comments();
         if !self.booted {
             self.booted = true;
             self.app.boot();

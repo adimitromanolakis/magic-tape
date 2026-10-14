@@ -36,6 +36,12 @@ pub enum Outcome {
         count: u64,
         pinned_first: bool,
     },
+    /// A comment fetch that failed, tagged with its url so the in-flight guard
+    /// can be released even when nothing arrives.
+    CommentsFailed {
+        url: String,
+        error: String,
+    },
     DownloadFinished {
         title: String,
         audio_only: bool,

@@ -143,6 +143,26 @@ impl YtDlp {
         Ok(model::parse_channels(&out))
     }
 
+    /// Already-downloaded comments for a video, if the cache has them.
+    ///
+    /// Paging the grid selects a video every keystroke, and a comment fetch is
+    /// a yt-dlp run that writes a file: without this, arrowing down a screen
+    /// spawned a dozen of them. Re-reading the cache keeps a second visit to a
+    /// video free.
+    pub fn comments_from_cache(
+        url: &str,
+        comments_dir: &Path,
+    ) -> Option<(String, Vec<Comment>, u64)> {
+        let path = comments_dir.join(video_stamp(url)).with_extension("info.json");
+        let json = std::fs::read_to_string(path).ok()?;
+        let (description, comments) = model::parse_info_json(&json);
+        if description.is_empty() && comments.is_empty() {
+            return None;
+        }
+        let count = model::comment_count(&json);
+        Some((description, comments, count))
+    }
+
     pub fn video_metadata(&self, url: &str, comments_dir: &Path, max: usize, replies: usize, sort: &str) -> Result<(String, Vec<Comment>, u64)> {
         let extractor = format!(
             "youtube:max_comments={max},all,{replies};comment_sort={sort}"
