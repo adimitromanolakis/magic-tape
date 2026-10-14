@@ -274,14 +274,8 @@ impl MagicTape {
             }
             Some(Command::MoveDown) => self.move_selection(1),
             Some(Command::MoveUp) => self.move_selection(-1),
-            Some(Command::PageDown) => {
-                let step = self.app.page_step() as isize;
-                self.move_selection(step);
-            }
-            Some(Command::PageUp) => {
-                let step = self.app.page_step() as isize;
-                self.move_selection(-step);
-            }
+            Some(Command::PageDown) => self.move_page(true),
+            Some(Command::PageUp) => self.move_page(false),
             Some(Command::First) => self.select_edge(true),
             Some(Command::Last) => self.select_edge(false),
             Some(Command::Play) => self.app.play_selected("1080p"),
@@ -331,6 +325,30 @@ impl MagicTape {
         }
         if let Some(next) = App::clamp_index(self.app.selected, count, delta) {
             self.app.select(Some(next));
+        }
+    }
+
+    /// PageUp/PageDown. A screenful of *rows*, keeping the column - see
+    /// `App::page_target`. Paging past the end with more to fetch loads the
+    /// next page instead of sitting against the bottom.
+    fn move_page(&mut self, down: bool) {
+        if self.app.item_count() == 0 {
+            return;
+        }
+        if self.app.page_would_overrun(down)
+            && self.app.has_more()
+            && !self.app.feed_state.loading
+        {
+            let first_new = self.app.item_count();
+            self.app.pending_select = Some(first_new);
+            log::info!(
+                "[nav] paging past the loaded items, fetching more (from {first_new})"
+            );
+            self.app.load_next_page();
+            return;
+        }
+        if let Some(target) = self.app.page_target_here(down) {
+            self.app.select(Some(target));
         }
     }
 

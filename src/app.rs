@@ -617,13 +617,66 @@ impl App {
         Some(self.feed)
     }
 
-    /// How far PageUp/PageDown move: one screenful, minus a row of overlap.
-    pub fn page_step(&self) -> usize {
-        Self::step_for(self.visible_rows)
+    /// How many *rows* PageUp/PageDown move: one screenful, minus a row so
+    /// the row just left behind stays visible and the jump reads as movement
+    /// rather than a cut.
+    pub fn page_rows(visible_rows: usize) -> usize {
+        if visible_rows == 0 { 5 } else { visible_rows.saturating_sub(1).max(1) }
     }
 
-    pub fn step_for(visible_rows: usize) -> usize {
-        if visible_rows == 0 { 5 } else { visible_rows.saturating_sub(1).max(1) }
+    /// Where a page key should land: the same column, one screenful of rows
+    /// away.
+    ///
+    /// Row-based on purpose. A step measured in *items* is wrong in a grid -
+    /// twenty visible rows across four columns is eighty items, and stepping by
+    /// "the number of visible rows" moves twenty items, which is five rows: the
+    /// key looked like it had done almost nothing. Keeping the column means the
+    /// selection lands on the same card position on the next screen instead of
+    /// jumping to its edge.
+    pub fn page_target(
+        current: Option<usize>,
+        count: usize,
+        visible_rows: usize,
+        columns: usize,
+        down: bool,
+    ) -> Option<usize> {
+        if count == 0 {
+            return None;
+        }
+        let columns = columns.max(1);
+        let current = current.unwrap_or(0).min(count - 1);
+        let (row, column) = (current / columns, current % columns);
+        let last_row = (count - 1) / columns;
+        let rows = Self::page_rows(visible_rows) as isize;
+        let moved = if down {
+            row as isize + rows
+        } else {
+            row as isize - rows
+        };
+        let target_row = moved.clamp(0, last_row as isize) as usize;
+        Some((target_row * columns + column).min(count - 1))
+    }
+
+    /// The page target for this app's current view and viewport.
+    pub fn page_target_here(&self, down: bool) -> Option<usize> {
+        Self::page_target(
+            self.selected,
+            self.item_count(),
+            self.visible_rows,
+            self.columns,
+            down,
+        )
+    }
+
+    /// Whether a page key would run off the end of what is loaded.
+    pub fn page_would_overrun(&self, down: bool) -> bool {
+        if !down || self.item_count() == 0 {
+            return false;
+        }
+        let columns = self.columns.max(1);
+        let current = self.selected.unwrap_or(0);
+        let last_row = (self.item_count() - 1) / columns;
+        current / columns + Self::page_rows(self.visible_rows) > last_row
     }
 
     /// Clamps a requested selection index into the current list.
@@ -1049,11 +1102,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn page_step_is_one_screenful_minus_one_row() {
-        assert_eq!(App::step_for(0), 5, "unknown viewport falls back to 5");
-        assert_eq!(App::step_for(1), 1);
-        assert_eq!(App::step_for(6), 5);
-        assert_eq!(App::step_for(20), 19);
+    fn a_page_is_a_screenful_of_rows() {
+        assert_eq!(App::page_rows(0), 5, "unknown viewport falls back to 5");
+        assert_eq!(App::page_rows(1), 1);
+        assert_eq!(App::page_rows(2), 1);
+        assert_eq!(App::page_rows(20), 19, "one row of overlap");
+    }
+
+    #[test]
+    fn paging_in_a_grid_moves_rows_not_items() {
+        // The bug: a step of "visible rows" items moved 19 items across 4
+        // columns, which is under five rows - three cards and no sense of
+        // having turned the page.
+        let columns = 4;
+        let visible = 20;
+        let target = App::page_target(Some(0), 400, visible, columns, true).unwrap();
+        assert_eq!(target, 19 * columns, "a whole screenful, same column");
+
+        // Same column is kept.
+        let from_column_three = App::page_target(Some(3), 400, visible, columns, true).unwrap();
+        assert_eq!(from_column_three, 19 * columns + 3);
+
+        // And back again, landing exactly where it started.
+        let back = App::page_target(Some(target), 400, visible, columns, false).unwrap();
+        assert_eq!(back, 0);
+    }
+
+    #[test]
+    fn paging_in_the_list_moves_one_row_per_item() {
+        // One column: 19 visible rows means 19 items, as before.
+        assert_eq!(App::page_target(Some(0), 400, 20, 1, true), Some(19));
+        assert_eq!(App::page_target(Some(19), 400, 20, 1, false), Some(0));
+    }
+
+    #[test]
+    fn paging_clamps_at_both_ends() {
+        assert_eq!(App::page_target(Some(0), 400, 20, 4, false), Some(0));
+        // Already on the last row (row 99, column 2): paging further stays put
+        // rather than sliding sideways to the end of that row.
+        assert_eq!(App::page_target(Some(398), 400, 20, 4, true), Some(398));
+        assert_eq!(App::page_target(None, 0, 20, 4, true), None, "empty list");
+        assert_eq!(App::page_target(Some(0), 1, 20, 4, true), Some(0), "single item");
+    }
+
+    #[test]
+    fn paging_from_a_partial_last_row_stays_on_it() {
+        // 10 items in 4 columns: rows are 0-3, 4-7, 8-9. Index 8 is row 2,
+        // the last, so paging down stays and paging up reaches the top.
+        assert_eq!(App::page_target(Some(8), 10, 20, 4, true), Some(8));
+        assert_eq!(
+            App::page_target(Some(5), 10, 20, 4, true),
+            Some(9),
+            "column 1 of the last row, which is index 9"
+        );
+        assert_eq!(App::page_target(Some(8), 10, 20, 4, false), Some(0));
     }
 
     #[test]

@@ -169,6 +169,13 @@ Qt theme like Qogir inherits nothing from Adwaita, so GTK-only names such as
 as short chains (`go-up`, then `go-previous`), because a theme that ships
 neither must not produce a blank row.
 
+**Paging** — `App::page_target` is row-based, not item-based, and keeps the column.
+This is the second time a size here was measured in the wrong unit: `visible_rows`
+is a count of *rows*, and using it directly as an item delta moved 19 items across a
+4-column grid, which is under five rows - so PageDown looked broken. In the list view
+`columns` is 1, which must be set explicitly on every path that pages, since paging
+multiplies by it and the grid leaves its value behind.
+
 **Per-frame work** — two hot-path rules, both learned the hard way: do not call `set_visuals` every
 frame (theme changes are tracked in `MagicTape::applied`), and do not build a `reqwest` client per
 request (`tasks.rs` keeps one in a `OnceLock` for all workers).
@@ -352,6 +359,7 @@ allowed through it, action commands are not.
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
+| Paging moves whole rows | `a_page_is_a_screenful_of_rows`, `paging_in_a_grid_moves_rows_not_items`, `paging_in_the_list_moves_one_row_per_item`, `paging_clamps_at_both_ends`, `paging_from_a_partial_last_row_stays_on_it` |
 | Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |
 | Download path resolution | `absolute_paths_are_used_as_they_are`, `relative_and_home_paths_resolve_against_home`, `trailing_slashes_and_blanks_are_tidied`, `the_old_style_default_is_migrated` |
 | Font resolution | `resolves_by_name_and_by_path`, `accepts_a_path_that_exists`, `falls_back_to_a_prefix_match`, `display_name_drops_the_extension`, `zoom_is_clamped_to_something_usable` |

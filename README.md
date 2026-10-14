@@ -43,6 +43,19 @@ of egui's built-ins rather than replacing them, so a font without CJK or emoji g
 those characters through the fallbacks. The size slider scales the whole interface, including the
 text the app paints itself.
 
+## Keyboard
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` or arrows | move the selection |
+| `PageDown` / `PageUp` | a screenful of rows, staying in the same column |
+| `Home` / `End` | first / last item |
+| `,` / `.` | previous / next page of results |
+| `Enter` | play · `F` best · `A` audio only |
+| `d` / `Shift+D` | download video / audio |
+| `l` · `s` · `b` · `c` | like, subscribe, open in browser, copy link |
+| `r` · `Ctrl+F` · `Ctrl+,` · `Ctrl+Q` | refresh, search, settings, quit |
+
 ## Downloads
 
 The download folder accepts absolute paths, which is what you want for a separate disk or a

@@ -200,6 +200,9 @@ fn grid_card(
 }
 
 fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
+    // One item per row. Paging reads this, and a stale value left over from
+    // the grid would multiply every page step by the old column count.
+    app.columns = 1;
     let row_h = LIST_ROW_H;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
