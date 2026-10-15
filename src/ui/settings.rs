@@ -2,7 +2,8 @@ use eframe::egui;
 
 use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, ListView, PinnedPlacement, Theme};
-use crate::ui::{accent, muted};
+use crate::model::Feed;
+use crate::ui::{accent, muted, warn_color};
 
 pub fn theme_label(theme: Theme) -> &'static str {
     match theme {
@@ -422,11 +423,54 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.add_space(6.0);
 
+    ui.label("Parallel fetching");
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(
+                "How many downloads may run at once. Comments are always limited to one, \
+                 because paging the grid would otherwise start a run per video."
+            )
+            .size(11.0)
+            .color(muted()),
+        )
+        .wrap(),
+    );
+    ui.horizontal(|ui| {
+        let mut ytdlp = app.config.parallel_ytdlp_runs as f32;
+        if ui
+            .add(
+                egui::Slider::new(&mut ytdlp, 1.0..=16.0)
+                    .text("yt-dlp")
+                    .clamping(egui::SliderClamping::Always),
+            )
+            .changed()
+        {
+            app.config.parallel_ytdlp_runs = ytdlp.round() as usize;
+        }
+        let mut thumbs = app.config.parallel_thumbnails as f32;
+        if ui
+            .add(
+                egui::Slider::new(&mut thumbs, 1.0..=32.0)
+                    .text("thumbnails")
+                    .clamping(egui::SliderClamping::Always),
+            )
+            .changed()
+        {
+            app.config.parallel_thumbnails = thumbs.round() as usize;
+        }
+    });
+    ui.add_space(6.0);
+
+    ui.label("Cookies");
+    cookies(app, ui);
+
+    ui.add_space(6.0);
+
     ui.label("Tools");
     ui.horizontal(|ui| {
         if ui.button("Update yt-dlp").clicked() {
             let yt = app.yt.clone();
-            app.worker.spawn("update yt-dlp", move || {
+            app.worker.spawn("update yt-dlp", crate::tasks::JobKind::Ytdlp, move || {
                 match yt.update() {
                     Ok(version) => crate::tasks::Outcome::YtDlpUpdated {
                         version: version.trim().to_string(),
@@ -446,6 +490,43 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
                 let _ = crate::player::open_directory(parent);
             }
     });
+}
+
+/// Says where cookies come from.
+///
+/// There is no exported cookie file: it was tried and removed. yt-dlp's
+/// browser reader reaches YouTube's session cookies where a static export
+/// drops them, and losing those turns the subscriptions feed into an empty
+/// list with no error. So cookies go straight to the browser on every request
+/// that needs them, and the file-free path is what made browsing faster.
+fn cookies(app: &mut App, ui: &mut egui::Ui) {
+    let browser = app.config.cookies_from_browser.trim();
+    if browser.is_empty() {
+        ui.label(
+            egui::RichText::new(
+                "No browser configured - public browsing only. Your subscriptions feed \
+                 needs one.",
+            )
+            .size(11.5)
+            .color(warn_color()),
+        );
+        return;
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "Cookies are read from {browser} whenever a request needs to be signed in. \
+             Public searches skip them entirely, which is most of the speed."
+        ))
+        .size(11.5),
+    );
+    if ui
+        .button("Check the subscription feed")
+        .on_hover_text("Load it once and say whether any videos came back")
+        .clicked()
+    {
+        app.status = "Checking the subscription feed...".into();
+        app.load_feed(Feed::Subscriptions, 0);
+    }
 }
 
 pub fn shortcuts_window(app: &mut App, ctx: &egui::Context) {

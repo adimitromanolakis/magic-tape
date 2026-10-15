@@ -74,6 +74,13 @@ pub struct Config {
     pub mpv_log_level: String,
     pub playback_client: String,
     pub ytdlp_binary: String,
+    /// How many yt-dlp processes may run at once. Each is heavy Python, so
+    /// the useful ceiling is low; six keeps feeds, comments and a download
+    /// moving without thrashing the machine.
+    pub parallel_ytdlp_runs: usize,
+    /// How many thumbnail fetches may run at once. These are cheap HTTP
+    /// requests, so this can be higher.
+    pub parallel_thumbnails: usize,
 }
 
 impl Default for Config {
@@ -103,6 +110,8 @@ impl Default for Config {
             mpv_log_level: "all=warn".into(),
             playback_client: "default".into(),
             ytdlp_binary: "yt-dlp".into(),
+            parallel_ytdlp_runs: 6,
+            parallel_thumbnails: 8,
         }
     }
 }
@@ -137,6 +146,8 @@ impl Config {
         self.list_length = self.list_length.clamp(1, 99);
         self.comments_max = self.comments_max.clamp(1, 500);
         self.comment_replies_max = self.comment_replies_max.clamp(0, 100);
+        self.parallel_ytdlp_runs = self.parallel_ytdlp_runs.clamp(1, 16);
+        self.parallel_thumbnails = self.parallel_thumbnails.clamp(1, 32);
         self.download_directory = normalise_directory(&self.download_directory);
         if self.download_directory == "/Downloads" {
             // The shell script stored this as "$HOME/Downloads"; the leading

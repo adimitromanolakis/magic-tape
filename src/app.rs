@@ -9,7 +9,7 @@ use crate::config::{Config, ListView, Paths};
 use crate::model::{Channel, Comment, DurationFilter, Feed, Video};
 use crate::player::{self, Player};
 use crate::store::{LastAction, Store};
-use crate::tasks::{Outcome, Worker};
+use crate::tasks::{JobKind, Outcome, Worker};
 use crate::thumbs::ThumbCache;
 use crate::yt::YtDlp;
 
@@ -165,6 +165,7 @@ impl App {
         let store = Store::new(paths.clone());
         let yt = YtDlp::new(&config);
         let player = Player::from_config(&config);
+        let worker = Worker::new(config.parallel_ytdlp_runs, config.parallel_thumbnails);
         Self {
             ctx: ctx.clone(),
             config,
@@ -172,7 +173,7 @@ impl App {
             store,
             yt,
             player,
-            worker: Worker::new(),
+            worker,
             thumbs: ThumbCache::new(ctx),
             icons: crate::ui::icons::IconTheme::new(ctx),
             section: Section::Feeds,
@@ -259,7 +260,7 @@ impl App {
             self.config.window_width,
             self.config.window_height,
         )));
-        self.worker.spawn("check yt-dlp", move || {
+        self.worker.spawn("check yt-dlp", JobKind::Ytdlp, move || {
             Outcome::YtDlpUpdated {
                 version: ytdlp.version(),
             }
@@ -306,7 +307,7 @@ impl App {
         } else {
             format!("Loading more {}...", feed.label())
         };
-        self.worker.spawn("load feed",
+        self.worker.spawn("load feed", JobKind::Ytdlp,
             move || match yt.list_feed(feed, &channel, query.as_deref(), filter, start, count) {
             Ok(listing) => Outcome::FeedLoaded {
                 feed,
@@ -333,6 +334,7 @@ impl App {
         self.status = "Searching playlists...".into();
         self.worker.spawn(
             "load playlists",
+            JobKind::Ytdlp,
             move || match yt.list_playlists(&query, start, count) {
                 Ok(videos) => Outcome::PlaylistsLoaded { query, start, videos },
                 Err(error) => Outcome::Failed {
@@ -354,6 +356,7 @@ impl App {
         self.status = "Searching channels...".into();
         self.worker.spawn(
             "search channels",
+            JobKind::Ytdlp,
             move || match yt.search_channels(&query, start, count) {
                 Ok(channels) => Outcome::ChannelsLoaded { query, start, channels },
                 Err(error) => Outcome::Failed {
@@ -368,7 +371,7 @@ impl App {
         let yt = self.yt.clone();
         let store = self.store.clone();
         self.status = "Importing your YouTube subscriptions...".into();
-        self.worker.spawn("import subscriptions",
+        self.worker.spawn("import subscriptions", JobKind::Ytdlp,
             move || {
             match yt.subscriptions() {
                 Ok(channels) => {
@@ -428,6 +431,7 @@ impl App {
         self.detail.error = None;
         self.worker.spawn(
             "load comments",
+            JobKind::Ytdlp,
             move || {
                 match yt.video_metadata(
                     &url,
@@ -509,6 +513,7 @@ impl App {
         self.status = format!("Downloading \"{title}\"...");
         self.worker.spawn(
             "download",
+            JobKind::Ytdlp,
             move || match yt.download(&video.url, std::path::Path::new(&directory), audio_only) {
                 Ok(()) => Outcome::DownloadFinished { title, audio_only },
                 Err(error) => Outcome::Failed {
@@ -969,6 +974,7 @@ impl App {
         let dest = self.store.thumb_path(&id);
         self.worker.spawn(
             "fetch channel avatar",
+            JobKind::Thumbnail,
             move || match crate::tasks::download_channel_avatar(&id, dest.clone()) {
                 Ok(()) => Outcome::ThumbnailReady { id, path: dest },
                 Err(error) => Outcome::ThumbnailMissing {
@@ -992,6 +998,7 @@ impl App {
         let dest = self.store.thumb_path(&id);
         self.worker.spawn(
             "download thumbnail",
+            JobKind::Thumbnail,
             move || match crate::tasks::download_thumbnail(&url, dest.clone()) {
                 Ok(()) => Outcome::ThumbnailReady { id, path: dest },
                 Err(error) => Outcome::ThumbnailMissing {
@@ -1049,6 +1056,8 @@ impl App {
                 // (to read) and as `&mut App` (to queue the downloads).
                 let mut videos = std::mem::take(&mut self.feed_state.videos);
                 Self::ensure_all_thumbnails(self, &mut videos);
+                self.store
+                    .prune_thumbnails(THUMB_CACHE_KEEP, THUMB_CACHE_BYTES);
                 self.feed_state.videos = videos;
                 self.status = format!(
                     "{} videos loaded - {}",
@@ -1184,6 +1193,9 @@ impl App {
         self.yt = YtDlp::new(&self.config);
         self.player = Player::from_config(&self.config);
         self.list_view = self.config.list_view;
+        // Take effect now, not at the next restart.
+        self.worker
+            .set_limits(self.config.parallel_ytdlp_runs, self.config.parallel_thumbnails);
         Ok(())
     }
 
@@ -1198,7 +1210,13 @@ impl App {
     }
 }
 
-    /// How long the selection must hold still before comments are fetched.
+    /// How many thumbnails to keep on disk, and how many bytes they may take.
+///
+/// Pruned oldest-first after each page of results.
+pub const THUMB_CACHE_KEEP: usize = 4000;
+pub const THUMB_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// How long the selection must hold still before comments are fetched.
 ///
 /// This used to be 450ms, and it was doing a job that no longer belongs to it.
 /// The delay stood in for the missing concurrency limit: every selection change
@@ -1752,5 +1770,84 @@ mod tests {
         app.take_scroll_offset(1, 70.0, 300.0);
         app.select(Some(2));
         assert_eq!(app.scroll_to_index, None, "same index needs no scrolling");
+    }
+}
+
+/// End-to-end checks that need the network, the real cache, and a signed-in
+/// browser. Opt-in, and the ones worth running before believing a change.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn logging() {
+        let _ = env_logger::Builder::from_env(
+            env_logger::Env::default().default_filter_or("info"),
+        )
+        .is_test(false)
+        .try_init();
+    }
+
+    /// Drains worker results into the app until it goes quiet, or time is up.
+    fn settle(app: &mut App, timeout: Duration) -> usize {
+        let started = Instant::now();
+        loop {
+            for outcome in app.worker.drain() {
+                app.handle_outcome(outcome);
+            }
+            if !app.worker.busy() && started.elapsed() > Duration::from_millis(400) {
+                break;
+            }
+            if started.elapsed() > timeout {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        app.item_count()
+    }
+
+    /// The whole point: start the app for real and count what the feed holds.
+    ///
+    /// Run with: `cargo test -- --ignored --nocapture live_feed_has_videos`
+    #[test]
+    #[ignore = "needs the network and a signed-in browser"]
+    fn live_feed_has_videos() {
+        logging();
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.boot();
+        let count = settle(&mut app, Duration::from_secs(60));
+
+        println!("--- subscriptions feed: {count} videos");
+        println!("status: {}", app.status);
+        println!("detail error: {:?}", app.detail.error);
+        println!("selected: {:?}", app.selected);
+        for video in app.feed_state.videos.iter().take(5) {
+            println!("  {} | {}", video.id, video.title);
+        }
+        assert!(
+            count > 0,
+            "the subscriptions feed came back empty (status: {})",
+            app.status
+        );
+    }
+
+    /// The same, for a search, which needs no account at all.
+    ///
+    /// Run with: `cargo test -- --ignored --nocapture live_search_has_videos`
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_search_has_videos() {
+        logging();
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, Startup::default());
+        app.config.show_comments = false;
+        app.start_search("rust");
+        let count = settle(&mut app, Duration::from_secs(60));
+        println!("--- search: {count} videos, status: {}", app.status);
+        for video in app.feed_state.videos.iter().take(5) {
+            println!("  {} | {}", video.id, video.title);
+        }
+        assert!(count > 0, "the search came back empty");
     }
 }

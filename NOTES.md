@@ -184,6 +184,28 @@ times (`watch?v=id`, `youtu.be/id`, tracking parameters), and a debounce that lo
 like the fix for "too many processes" will hide a missing limit - check which one is
 actually doing the work.
 
+**Cookies** — two rounds of guessing wrong here, both worth remembering. The first guess was
+that `--cookies-from-browser` was slow because it re-reads the browser's encrypted store; it
+is not, and passing an exported file saves only ~0.2s. The real cost is *carrying* cookies at
+all, which puts the request on YouTube's authenticated path. So public endpoints
+(`Auth::Public`: search, channels, playlists, ordinary comments) go out anonymous and fall back
+only on a login error, while subscriptions/trending/downloads are `Auth::SignedIn`.
+
+The second guess was that exporting cookies to a file was worth it. It was not: yt-dlp's browser
+reader reaches YouTube's `SID`/`HSID`/`SSID`, and a static export silently drops them - the jar
+contained only `.google.com` cookies, passed a "does this look like a cookie jar" check that was
+too weak, and the subscriptions feed then answered with 860 bytes and exit code 0. No videos, no
+error. The file is gone; cookies go to the browser every time.
+
+The lesson both times: an empty result that arrives with a success code is the worst possible
+failure, and neither a size check nor a 0600 permission catches it. `live_feed_has_videos` exists
+because of that - it boots the app and counts what the feed actually holds.
+
+**Fetching limits** — `tasks::Permits` is a counting semaphore per `JobKind`. The permit is
+taken *inside* the worker thread; taking it before spawning would block the UI thread,
+which is the one thing the pool must never do. Comments stay at exactly one and are not
+configurable: that single-flight is correctness, not tuning.
+
 **The comment debounce** — the 450ms settle was standing in for a concurrency limit that now
 exists. With one fetch in flight and the newest request winning, a fast pan costs the run already
 going plus at most the video you stopped on, so the timer only has to collapse a burst of
@@ -372,6 +394,10 @@ allowed through it, action commands are not.
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
+| The feed has videos in it | `live_feed_has_videos`, `live_search_has_videos` (both opt-in: they need the network and a signed-in browser) |
+| Fetch permits | `a_permit_is_returned_when_the_job_finishes`, `the_pool_holds_the_line_at_its_limit`, `raising_the_limit_lets_waiting_jobs_through`, `a_limit_of_zero_is_treated_as_one` |
+| Cache retention | `thumbnails_are_pruned_oldest_first_and_only_when_needed`, `the_byte_budget_can_prune_before_the_count`, `comment_files_are_pruned_to_the_cap` |
+| Cookie arguments | `a_signed_in_request_always_carries_browser_cookies`, `a_public_request_carries_no_cookies`, `an_auth_failure_is_told_apart_from_a_broken_video` |
 | Comment fetching | `the_settle_delay_is_short_enough_to_feel_immediate`, `a_finished_fetch_queues_only_what_is_still_on_screen`, `paging_fast_never_queues_more_than_one_fetch`, `only_one_comment_fetch_is_ever_in_flight`, `a_video_is_identified_by_its_id_not_its_url` |
 | Paging moves whole rows | `a_page_is_a_screenful_of_rows`, `paging_in_a_grid_moves_rows_not_items`, `paging_in_the_list_moves_one_row_per_item`, `paging_clamps_at_both_ends`, `paging_from_a_partial_last_row_stays_on_it` |
 | Search does not hijack other feeds | `only_the_search_feed_carries_the_query`, `a_leftover_query_cannot_poison_another_feed`, `leaving_a_search_returns_to_the_previous_feed`, `a_search_inside_a_search_keeps_the_original_return_feed`, `an_empty_term_starts_nothing`, `leaving_a_search_from_another_feed_only_clears_the_term`, `a_term_only_searches_the_search_feed`, `a_stored_term_never_reaches_ytdlp_for_another_feed` |

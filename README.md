@@ -25,6 +25,46 @@ cargo build --release
 ./target/release/magic-tape
 ```
 
+## Speed
+
+Measured on the development machine, per request:
+
+| Request | Before | After |
+|---------|--------|-------|
+| Search, 5 results | 3.2 s | **1.0 s** |
+| Comments, one video | 4.5 s | ~3.4 s |
+| Subscriptions feed | 4.5 s | **1.8 s** |
+| yt-dlp process start | 0.22 s | 0.22 s |
+
+The large win is **not carrying cookies when they are not needed**. yt-dlp was
+sent `--cookies-from-browser chrome` on every single call, and merely *having*
+cookies puts the request on YouTube's authenticated path - a cookie-free search
+takes 1.0 s and returns the same results. Public work (search, channel pages,
+playlists, ordinary comments) now runs cookie-free and falls back only when
+YouTube answers with a login error. Subscriptions, trending and downloads
+always carry them.
+
+Cookies are read from the browser on each request rather than exported to a
+file. Exporting was tried: it saved about 0.2 s a call, and yt-dlp's browser
+reader reaches YouTube's `SID`/`HSID`/`SSID` cookies where a static export
+silently drops them - which turns the subscriptions feed into an empty list
+with exit code 0. An empty feed from a signed-in request is now reported in the
+log and Settings can re-check it on demand.
+
+Thumbnails are 720p (`hq720`) and mipmapped. Two things were wrong before:
+`maxresdefault` is the same 1280x720 but was tried first on every video, so it
+cost a 404 whenever it was absent; and linear filtering with no mip chain
+aliased badly when a 1280px picture was drawn into a 260px card, which reads as
+nearest-neighbour.
+
+Fetching is bounded and configurable in Settings -> Maintenance:
+`parallel_ytdlp_runs` (default 6) and `parallel_thumbnails` (default 8). Comments
+are always limited to one, since that is a correctness property, not a tuning
+knob.
+
+Caches are pruned oldest-first: 1200 videos of comments, 4000 thumbnails, and a
+byte budget on each.
+
 ## Icons
 
 Icons in the folder chooser come from your own desktop icon theme, resolved

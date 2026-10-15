@@ -23,6 +23,24 @@ impl YtDlp {
         }
     }
 
+    /// The cookie arguments a signed-in request carries.
+    ///
+    /// Straight from the browser, every time. Exporting them to a file was
+    /// tried and reverted: it saved about 0.2s per call, and yt-dlp's browser
+    /// reader reaches cookies a static export drops - notably YouTube's own
+    /// SID/HSID/SSID, without which the subscriptions feed answers with an
+    /// empty playlist and exit code 0.
+    fn cookie_args(&self) -> Vec<String> {
+        if self.browser.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                "--cookies-from-browser".into(),
+                self.browser.trim().to_string(),
+            ]
+        }
+    }
+
     pub fn describe(&self) -> String {
         let version = self.version();
         let browser = if self.browser.trim().is_empty() {
@@ -57,12 +75,20 @@ impl YtDlp {
 
     pub fn version(&self) -> String {
         self.run_output("version", &["--version"])
-            .map(|s| s.trim().to_string())
+            .map(|v| v.trim().to_string())
             .unwrap_or_else(|_| "unavailable".into())
     }
 
     pub fn update(&self) -> Result<String> {
         self.run_output("update", &["-U"]).context("updating yt-dlp")
+    }
+
+    pub fn subscriptions(&self) -> Result<Vec<Channel>> {
+        let out = self.run_output(
+            "import-subscriptions",
+            &["--flat-playlist", "-J", "https://www.youtube.com/feed/channels"],
+        )?;
+        Ok(model::parse_channels(&out))
     }
 
     pub fn list_feed(
@@ -89,7 +115,25 @@ impl YtDlp {
         args.push("-J".into());
         args.push(format!("https://www.youtube.com{path}"));
 
-        let out = self.run_output("list-feed", &args).map_err(|error| explain(feed, error))?;
+        // Subscriptions and trending need the account; everything else is
+        // public and costs about a second less without cookies.
+        let auth = match feed {
+            Feed::Subscriptions | Feed::Trending | Feed::Recommended => Auth::SignedIn,
+            Feed::Search | Feed::Channel | Feed::Repeat => Auth::Public,
+        };
+        let out = self
+            .run_with_auth("list-feed", &args, None, auth)
+            .map_err(|error| explain(feed, error))?;
+        if auth == Auth::SignedIn && !out.contains("\"entries\"") {
+            // Anonymous requests to the subscriptions feed come back as an
+            // empty playlist rather than an error, which is how a broken
+            // cookie setup looks like "no new videos".
+            log::warn!(
+                "[yt-dlp] list-feed :: {} returned no entries while signed in - check your {} cookies",
+                feed.label(),
+                self.browser
+            );
+        }
         Ok(Listing {
             videos: model::parse_videos(&out),
         })
@@ -109,7 +153,7 @@ impl YtDlp {
                 DurationFilter::Playlists.query_value()
             ),
         ];
-        let out = self.run_output("list-playlists", &args)?;
+        let out = self.run_public("list-playlists", &args, None)?;
         Ok(model::parse_videos(&out))
     }
 
@@ -126,7 +170,7 @@ impl YtDlp {
                 urlencode(query)
             ),
         ];
-        let out = self.run_output("search-channels", &args)?;
+        let out = self.run_public("search-channels", &args, None)?;
         let channels = model::parse_channels(&out);
         if channels.is_empty() {
             bail!("no channels found for \"{query}\"")
@@ -135,20 +179,6 @@ impl YtDlp {
         }
     }
 
-    pub fn subscriptions(&self) -> Result<Vec<Channel>> {
-        let out = self.run_output(
-            "import-subscriptions",
-            &["--flat-playlist", "-J", "https://www.youtube.com/feed/channels"],
-        )?;
-        Ok(model::parse_channels(&out))
-    }
-
-    /// Already-downloaded comments for a video, if the cache has them.
-    ///
-    /// Paging the grid selects a video every keystroke, and a comment fetch is
-    /// a yt-dlp run that writes a file: without this, arrowing down a screen
-    /// spawned a dozen of them. Re-reading the cache keeps a second visit to a
-    /// video free.
     pub fn comments_from_cache(
         url: &str,
         comments_dir: &Path,
@@ -173,7 +203,9 @@ impl YtDlp {
         let stamp = video_stamp(url);
         let template = comments_dir.join(&stamp);
         let _ = std::fs::remove_file(template.with_extension("info.json"));
-        self.run_output("video-metadata", &[
+        // Ordinary videos are public; an age-restricted one falls back to the
+        // signed-in path by itself.
+        self.run_public("video-metadata", &[
             "-q",
             "--write-comments",
             "--no-download",
@@ -183,13 +215,13 @@ impl YtDlp {
             url,
             "-o",
             &template.to_string_lossy(),
-        ])?;
+        ], None)?;
         let path = template.with_extension("info.json");
         let json = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let (description, comments) = model::parse_info_json(&json);
         let count = model::comment_count(&json);
-        prune_comment_files(comments_dir, 20);
+        prune_comment_files(comments_dir, COMMENT_CACHE_KEEP);
         Ok((description, comments, count))
     }
 
@@ -207,12 +239,17 @@ impl YtDlp {
     }
 
     fn run_output<S: AsRef<std::ffi::OsStr>>(&self, label: &str, args: &[S]) -> Result<String> {
-        let mut cmd = Command::new(&self.binary);
-        if !self.browser.trim().is_empty() {
-            cmd.args(["--cookies-from-browser", self.browser.trim()]);
-        }
-        cmd.args(args);
-        run(cmd, &self.binary, label)
+        self.run_request(label, args, None, Auth::SignedIn)
+    }
+
+    fn run_with_auth<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        label: &str,
+        args: &[S],
+        dir: Option<&Path>,
+        auth: Auth,
+    ) -> Result<String> {
+        self.run_request(label, args, dir, auth)
     }
 
     fn run_output_in<S: AsRef<std::ffi::OsStr>>(
@@ -221,12 +258,107 @@ impl YtDlp {
         args: &[S],
         dir: &Path,
     ) -> Result<String> {
-        let mut cmd = Command::new(&self.binary);
-        if !self.browser.trim().is_empty() {
-            cmd.args(["--cookies-from-browser", self.browser.trim()]);
+        self.run_request(label, args, Some(dir), Auth::SignedIn)
+    }
+
+    /// A request that anyone may make, run without cookies first.
+    ///
+    /// Measured on this machine: a cookie-free search is 0.9s against 3.2s with
+    /// cookies, and returns the same results. The cost is not reading the
+    /// browser's store - it is *carrying* cookies, which puts the request on
+    /// YouTube's authenticated path. So public work goes cookie-free and only
+    /// falls back when YouTube says it needs a login.
+    fn run_public<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        label: &str,
+        args: &[S],
+        dir: Option<&Path>,
+    ) -> Result<String> {
+        self.run_request(label, args, dir, Auth::Public)
+    }
+
+    /// Runs yt-dlp with cookies, and on an authentication failure refreshes the
+    /// cookie file and tries exactly once more.
+    ///
+    /// One retry, not a loop: if a refreshed cookie file is still rejected,
+    /// the user is told, because the cause is on their side (the browser
+    /// logged out, or the wrong browser is configured) and retrying would only
+    /// hammer YouTube.
+    fn run_request<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        label: &str,
+        args: &[S],
+        dir: Option<&Path>,
+        auth: Auth,
+    ) -> Result<String> {
+        if auth == Auth::Public {
+            match self.invoke_with(label, args, dir, false) {
+                Ok(stdout) => return Ok(stdout),
+                Err(message) if !looks_like_auth_failure(&message) => bail!("{message}"),
+                Err(message) => {
+                    log::info!(
+                        "[yt-dlp] {label} :: needs a login ({message}), retrying with cookies"
+                    );
+                }
+            }
         }
-        cmd.args(args).current_dir(dir);
-        run(cmd, &self.binary, label)
+        self.run_signed_in(label, args, dir)
+    }
+
+    /// The signed-in path: the exported file if we have one, the browser
+    /// otherwise, then exactly one refresh-and-retry on an auth failure.
+    fn run_signed_in<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        label: &str,
+        args: &[S],
+        dir: Option<&Path>,
+    ) -> Result<String> {
+        // Always signed in on the first attempt. Gating this on "do we have an
+        // exported file" sent the request out *anonymously* on a cold start,
+        // and the subscriptions feed answers an anonymous request with zero
+        // entries and no error - so the app just looked empty.
+        match self.invoke_with(label, args, dir, true) {
+            Ok(stdout) => return Ok(stdout),
+            Err(message) if !looks_like_auth_failure(&message) => bail!("{message}"),
+            Err(_) => {}
+        }
+
+        // Retry once: Chrome being locked or mid-write can refuse a read that
+        // works a moment later.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        match self.invoke_with(label, args, dir, true) {
+            Ok(stdout) => {
+                log::info!("[yt-dlp] {label} :: succeeded on the retry");
+                Ok(stdout)
+            }
+            Err(retry) if looks_like_auth_failure(&retry) => bail!(
+                "YouTube refused the {} cookies for this. Check that you are signed in to YouTube in that browser.",
+                self.browser
+            ),
+            Err(retry) => Err(anyhow::anyhow!("{retry}")),
+        }
+    }
+
+    /// One yt-dlp invocation, returning its stdout or its last stderr line.
+    fn invoke_with<S: AsRef<std::ffi::OsStr>>(
+        &self,
+        label: &str,
+        args: &[S],
+        dir: Option<&Path>,
+        use_cookies: bool,
+    ) -> Result<String, String> {
+        let mut cmd = Command::new(&self.binary);
+        if use_cookies {
+            cmd.args(self.cookie_args());
+        }
+        cmd.args(args);
+        if let Some(dir) = dir {
+            cmd.current_dir(dir);
+        }
+        match run(cmd, &self.binary, label) {
+            Ok(stdout) => Ok(stdout),
+            Err(error) => Err(error.to_string()),
+        }
     }
 }
 
@@ -296,6 +428,37 @@ fn run(mut cmd: Command, binary: &str, label: &str) -> Result<String> {
     Ok(stdout.into_owned())
 }
 
+/// Whether a request may be made by anyone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Auth {
+    /// Public data - search, channel pages, playlists, comments on ordinary
+    /// videos. Try without cookies, because carrying them is the expensive
+    /// part, and fall back only if YouTube insists.
+    Public,
+    /// Needs the account: subscriptions, trending, downloads.
+    SignedIn,
+}
+
+/// Whether an error means "your cookies are no good" rather than "this video
+/// is broken".
+///
+/// Worth being generous: re-exporting costs one slow call, and a wrong guess
+/// only makes that call run twice.
+pub fn looks_like_auth_failure(message: &str) -> bool {
+    const MARKERS: [&str; 8] = [
+        "sign in to confirm",
+        "login required",
+        "private video",
+        "confirm you're not a bot",
+        "members-only",
+        "this video is available to this channel's members",
+        "cookies",
+        "use --cookies-from-browser",
+    ];
+    let lower = message.to_lowercase();
+    MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
 fn explain(feed: Feed, error: anyhow::Error) -> anyhow::Error {
     let message = error.to_string();
     if matches!(feed, Feed::Trending)
@@ -308,26 +471,57 @@ fn explain(feed: Feed, error: anyhow::Error) -> anyhow::Error {
     error
 }
 
+/// How many videos' comments to keep.
+///
+/// This used to be 20, which meant the 21st video evicted the first: come back
+/// to anything you had already watched and it cost another yt-dlp run, about
+/// three seconds, to read comments that had been on disk an hour ago.
+pub const COMMENT_CACHE_KEEP: usize = 1200;
+
+/// A ceiling on the comment cache, so "keep 1200 videos" cannot mean "use up
+/// the disk" if a video ever had an enormous thread.
+pub const COMMENT_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Keeps the most recent comment files and deletes the rest: one file per video
 /// would otherwise grow without bound in the cache directory.
+/// Deletes the least recently used comment files until both the count and the
+/// byte budget are satisfied.
+///
+/// Sorted oldest first, so what survives is what was read most recently.
 fn prune_comment_files(dir: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            Some((modified, e.path()))
+            let meta = e.metadata().ok()?;
+            let modified = meta.modified().ok()?;
+            Some((modified, meta.len(), e.path()))
         })
         .collect();
     if files.len() <= keep {
         return;
     }
-    files.sort_by_key(|(modified, _)| *modified);
-    for (_, path) in &files[..files.len() - keep] {
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut bytes: u64 = files.iter().map(|(_, size, _)| *size).sum();
+    // Oldest first, but never past the count we are willing to keep.
+    let droppable = files.len() - keep;
+    let mut dropped = 0usize;
+    for (_, size, path) in &files {
+        let over_count = dropped < droppable;
+        let over_bytes = bytes > COMMENT_CACHE_BYTES;
+        if !over_count && !over_bytes {
+            break;
+        }
+        bytes = bytes.saturating_sub(*size);
         std::fs::remove_file(path).ok();
+        dropped += 1;
+    }
+    if dropped > 0 {
+        log::info!("[yt-dlp] comment cache :: pruned {dropped} old files");
     }
 }
 
@@ -519,6 +713,142 @@ mod tests {
         );
     }
 
+    /// A stand-in for yt-dlp that records the arguments it was given.
+    #[cfg(test)]
+    fn recording_binary(dir: &Path, record: &Path) -> String {
+        let script = dir.join("record-yt-dlp");
+        let body = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '{{}}'\n",
+            record.display()
+        );
+        std::fs::write(&script, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        script.display().to_string()
+    }
+
+    #[test]
+    fn a_signed_in_request_always_carries_browser_cookies() {
+        // No exported jar: yt-dlp's browser reader is the only thing that
+        // reaches YouTube's SID/HSID/SSID, and a static export silently drops
+        // them - which makes the subscriptions feed answer with an empty
+        // playlist and exit code 0.
+        let dir = std::env::temp_dir().join(format!("mt-cookie-args-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("args.txt");
+        let script = recording_binary(&dir, &record);
+        let mut config = test_config();
+        config.ytdlp_binary = script;
+        config.cookies_from_browser = "chrome".into();
+        let yt = YtDlp::new(&config);
+
+        let _ = yt.list_feed(Feed::Subscriptions, "", None, DurationFilter::Any, 0, 5);
+        let args = std::fs::read_to_string(&record).unwrap();
+        assert!(
+            args.contains("--cookies-from-browser") && args.contains("chrome"),
+            "a signed-in request must always carry browser cookies: {args}"
+        );
+        assert!(
+            !args.contains("--cookies "),
+            "and never a file: {args}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_public_request_carries_no_cookies() {
+        // The speed win depends on this: search must go out anonymously.
+        let dir = std::env::temp_dir().join(format!("mt-public-args-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("args.txt");
+        let script = recording_binary(&dir, &record);
+        let mut config = test_config();
+        config.ytdlp_binary = script;
+        config.cookies_from_browser = "chrome".into();
+        let yt = YtDlp::new(&config);
+
+        let _ = yt.list_feed(Feed::Search, "", Some("rust"), DurationFilter::Any, 0, 5);
+        let args = std::fs::read_to_string(&record).unwrap();
+        assert!(
+            !args.contains("--cookies"),
+            "a search must not carry cookies: {args}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_auth_failure_is_told_apart_from_a_broken_video() {
+        for message in [
+            "ERROR: [youtube] x: Sign in to confirm you're not a bot",
+            "ERROR: [youtube] x: Private video. Sign in if you've been granted access",
+            "ERROR: [youtube] x: This video is available to this channel's members",
+            "ERROR: [youtube] x: login required",
+            "ERROR: use --cookies-from-browser or --cookies for this",
+        ] {
+            assert!(
+                looks_like_auth_failure(message),
+                "should be treated as an auth problem: {message}"
+            );
+        }
+        for message in [
+            "ERROR: [youtube] x: This video is unavailable",
+            "ERROR: [youtube] x: Video unavailable. This video is no longer available",
+            "ERROR: [youtube] x: Private video. Sign in if you've been granted access", // handled above
+        ] {
+            if message.contains("Sign in") {
+                continue;
+            }
+            assert!(
+                !looks_like_auth_failure(message),
+                "should not cost a cookie refresh: {message}"
+            );
+        }
+        assert!(!looks_like_auth_failure(""));
+    }
+
+    /// Opt-in: times a public request against a signed-in one through the real
+    /// code path, which is the whole point of the split.
+    /// Run with: `cargo test -- --ignored --nocapture live_public_vs_signed_in`
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_public_vs_signed_in() {
+        crate::yt::live::init_logging();
+        let mut config = test_config();
+        config.cookies_from_browser =
+            std::env::var("MT_BROWSER").unwrap_or_else(|_| "chrome".into());
+        let yt = YtDlp::new(&config);
+
+        let secs = |d: std::time::Duration| d.as_secs_f64();
+        let time_it = |auth: Auth| {
+            let started = std::time::Instant::now();
+            let result = yt.run_with_auth(
+                "timing",
+                &[
+                    "--flat-playlist",
+                    "--playlist-end",
+                    "5",
+                    "-J",
+                    "https://www.youtube.com/results?search_query=rust&sp=EgQQARgE",
+                ],
+                None,
+                auth,
+            );
+            (started.elapsed(), result.is_ok())
+        };
+        let (public_time, public_ok) = time_it(Auth::Public);
+        let (signed_in_time, signed_ok) = time_it(Auth::SignedIn);
+        println!(
+            "search, public (no cookies): {:.2}s ok={public_ok}\nsearch, signed in:          {:.2}s ok={signed_ok}",
+            secs(public_time),
+            secs(signed_in_time)
+        );
+    }
+
     #[test]
     fn a_stored_term_never_reaches_ytdlp_for_another_feed() {
         // Drives the real subprocess plumbing with a stand-in for yt-dlp that
@@ -584,7 +914,7 @@ mod live {
         dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
     }
 
-    fn init_logging() {
+    pub(super) fn init_logging() {
         let _ = env_logger::Builder::from_env(
             env_logger::Env::default().default_filter_or("info"),
         )

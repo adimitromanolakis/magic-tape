@@ -37,11 +37,7 @@ impl ThumbCache {
                 let (width, height) = source.dimensions();
                 let size = [width as usize, height as usize];
                 let image = ColorImage::from_rgba_unmultiplied(size, source.as_raw());
-                let texture = ctx.load_texture(
-                    format!("thumb-{id}"),
-                    image,
-                    TextureOptions::LINEAR,
-                );
+                let texture = ctx.load_texture(format!("thumb-{id}"), image, sampling());
                 self.textures.insert(id.to_string(), texture);
             }
     }
@@ -96,16 +92,28 @@ pub fn is_custom_thumbnail(url: &str) -> bool {
     path.rsplit('/').next().is_some_and(|f| f.contains("_custom_"))
 }
 
+/// How thumbnails are sampled when drawn.
+///
+/// `TextureOptions::LINEAR` filters both ways but leaves `mipmap_mode: None`,
+/// so a 1280x720 picture drawn into a ~260pt card is minified about three times
+/// with no mip chain. Sparse linear samples at that ratio alias badly, which is
+/// what made the cards look blocky and, to the eye, nearest-neighbour.
+/// Mipmapping is what fixes it; the magnification filter is untouched.
+fn sampling() -> egui::TextureOptions {
+    egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear))
+}
+
 /// Candidate URLs to try, best first, for a thumbnail that may be unreachable.
 ///
-/// The named variants are tried from sharpest to smallest; `mqdefault` is last
-/// because it is 16:9 - the shape the cards use - and the one YouTube keeps
-/// published most reliably.
+/// 720p is the one size: `maxresdefault` is the same 1280x720 as `hq720`, so it
+/// never looked sharper while costing a 404 on every video that lacks it.
+/// `mqdefault` stays as the fallback for old uploads that never published a
+/// 720p picture - it is 16:9, the shape the cards use, and it always exists.
 pub fn public_variants(url: &str) -> Vec<String> {
     let Some(id) = video_id_of(url) else {
         return vec![url.to_string()];
     };
-    ["maxresdefault.jpg", "hq720.jpg", "hqdefault.jpg", "mqdefault.jpg"]
+    ["hq720.jpg", "mqdefault.jpg"]
         .iter()
         .map(|name| format!("https://i.ytimg.com/vi/{id}/{name}"))
         .collect()
@@ -183,20 +191,37 @@ mod tests {
     }
 
     #[test]
-    fn variants_are_the_same_video_sharpest_first() {
+    fn variants_are_720p_with_a_smaller_fallback() {
         let variants = public_variants("https://i.ytimg.com/vi/Zper_lsRofk/hq720_custom_2.jpg");
         assert_eq!(
             variants,
             vec![
-                "https://i.ytimg.com/vi/Zper_lsRofk/maxresdefault.jpg",
+                // 720p first. maxresdefault is the same 1280x720 and used to
+                // cost a 404 on every video that lacks it.
                 "https://i.ytimg.com/vi/Zper_lsRofk/hq720.jpg",
-                "https://i.ytimg.com/vi/Zper_lsRofk/hqdefault.jpg",
                 "https://i.ytimg.com/vi/Zper_lsRofk/mqdefault.jpg",
-            ]
+            ],
+            "one size, plus the always-there 16:9 safety net"
         );
         assert!(
             variants.last().unwrap().ends_with("mqdefault.jpg"),
             "the 16:9 fallback must be tried last so it is the safety net"
+        );
+    }
+
+    #[test]
+    fn thumbnails_are_mipmapped() {
+        // Without mipmaps a 1280x720 card image minified three times aliases,
+        // and reads as nearest-neighbour.
+        assert_eq!(
+            sampling().mipmap_mode,
+            Some(egui::TextureFilter::Linear),
+            "minified thumbnails need a mip chain"
+        );
+        assert_eq!(
+            sampling().magnification,
+            egui::TextureFilter::Linear,
+            "magnification is left alone"
         );
     }
 

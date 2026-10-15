@@ -264,6 +264,45 @@ impl Store {
         self.paths.thumb_dir.join(format!("img-{id}.jpg"))
     }
 
+    /// Deletes the least recently used thumbnails until the cache fits.
+    ///
+    /// Without this the directory only ever grew: the one control was "clear
+    /// everything", so a user who browses for a week ends up with a cache of
+    /// every video they ever passed over.
+    pub fn prune_thumbnails(&self, keep: usize, budget_bytes: u64) {
+        let Ok(entries) = fs::read_dir(&self.paths.thumb_dir) else {
+            return;
+        };
+        let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let meta = entry.metadata().ok()?;
+                let modified = meta.modified().ok()?;
+                Some((modified, meta.len(), entry.path()))
+            })
+            .collect();
+        // Either bound can be the binding one, so both are checked before
+        // deciding there is nothing to do.
+        let mut bytes: u64 = files.iter().map(|(_, size, _)| *size).sum();
+        if files.len() <= keep && bytes <= budget_bytes {
+            return;
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        let droppable = files.len().saturating_sub(keep);
+        let mut dropped = 0usize;
+        for (_, size, path) in &files {
+            if dropped >= droppable && bytes <= budget_bytes {
+                break;
+            }
+            bytes = bytes.saturating_sub(*size);
+            fs::remove_file(path).ok();
+            dropped += 1;
+        }
+        if dropped > 0 {
+            log::info!("[store] thumbnail cache :: pruned {dropped} old files");
+        }
+    }
+
     pub fn clear_thumbnails(&self) -> Result<()> {
         if let Ok(entries) = fs::read_dir(&self.paths.thumb_dir) {
             for entry in entries.flatten() {
@@ -307,6 +346,56 @@ mod tests {
             history_dir: dir.join("cache/history"),
         };
         (Store::new(paths), dir)
+    }
+
+    #[test]
+    fn thumbnails_are_pruned_oldest_first_and_only_when_needed() {
+        let (store, dir) = temp_store("thumbs");
+        let thumb_dir = store.paths.thumb_dir.clone();
+        for i in 0..6 {
+            std::fs::write(store.thumb_path(&format!("v{i}")), "x").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(std::fs::read_dir(&thumb_dir).unwrap().count(), 6);
+
+        store.prune_thumbnails(4, u64::MAX);
+        let left: Vec<String> = std::fs::read_dir(&thumb_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left.len(), 4, "the count cap is respected");
+        assert!(
+            left.contains(&"img-v5.jpg".to_string()),
+            "the newest survive: {left:?}"
+        );
+        assert!(
+            !left.contains(&"img-v0.jpg".to_string()),
+            "the oldest go first: {left:?}"
+        );
+
+        store.prune_thumbnails(10, u64::MAX);
+        assert_eq!(
+            std::fs::read_dir(&thumb_dir).unwrap().count(),
+            4,
+            "a limit above the count must not delete anything"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_byte_budget_can_prune_before_the_count() {
+        let (store, dir) = temp_store("thumbs");
+        let thumb_dir = store.paths.thumb_dir.clone();
+        for i in 0..5 {
+            std::fs::write(store.thumb_path(&format!("b{i}")), "0123456789").unwrap();
+        }
+        store.prune_thumbnails(100, 15);
+        let left = std::fs::read_dir(&thumb_dir)
+            .unwrap()
+            .count();
+        assert!(left < 5, "a tight byte budget trims even under the count");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn video(title: &str, id: &str) -> Video {
