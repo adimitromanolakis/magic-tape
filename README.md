@@ -253,6 +253,20 @@ Set **Settings → Playback → mpv log level** to change the detail (`all=warn`
 `all=info` for the full playback chain). Any mpv failure - including errors from its internal yt-dlp call, prefixed
 `[ytdl_hook]` - is in the log.
 
+Every mpv invocation - playback, audio-only and the availability probe alike - also prints the
+complete command line to **stdout** as it happens, one argument per line, since the
+`--ytdl-format` selectors carry commas and slashes that are unreadable packed together:
+
+```
+[mpv] play :: mpv (resolved: /usr/bin/mpv) with 9 argument(s)
+[mpv] play ::   argv[0] = mpv
+[mpv] play ::   argv[1] = --force-window=yes
+[mpv] play ::   argv[5] = --ytdl-format=bv*[height<=1080]+ba/b[height<=1080] / wv*+ba/w
+[mpv] play ::   argv[9] = https://www.youtube.com/watch?v=...
+[mpv] play :: mpv pid=385865
+[mpv] play :: pid=385865 exited normally (exit status: 0)
+```
+
 ## How playback works
 
 Clicking a quality button hands mpv the **YouTube page URL** plus a format selector and lets mpv's

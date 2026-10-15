@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use anyhow::{Context, Result};
@@ -53,13 +53,12 @@ impl Player {
     }
 
     pub fn available(&self) -> bool {
-        let argv = vec!["--version".to_string()];
-        log::info!("[mpv] availability check :: {} {}", self.mpv_binary, crate::yt::quote(&argv));
-        let output = Command::new(&self.mpv_binary)
+        log::info!("[mpv] availability check :: {}", self.mpv_binary);
+        let available = MpvInvocation::new("probe", &self.mpv_binary)
             .arg("--version")
-            .stderr(Stdio::null())
-            .output();
-        let available = output.map(|o| o.status.success()).unwrap_or(false);
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         log::info!("[mpv] availability check :: found={available}");
         available
     }
@@ -70,13 +69,13 @@ impl Player {
     /// frequently rejected with HTTP 403 once ffmpeg fetches them, so the page
     /// URL plus a format selector is the only path that reliably works.
     pub fn play(&self, url: &str, profile: &str) -> Result<()> {
-        let mut args = self.base_args();
-        args.extend(self.ytdl_args(profile));
+        let mut call = MpvInvocation::new("play", &self.mpv_binary)
+            .args(self.base_args())
+            .args(self.ytdl_args(profile));
         if self.fullscreen {
-            args.push("--fullscreen".into());
+            call = call.arg("--fullscreen");
         }
-        args.push(url.to_string());
-        self.spawn(args, "play")
+        call.arg(url).run()
     }
 
     /// The `--ytdl-*` options that carry the quality profile, the cookies and
@@ -125,12 +124,13 @@ impl Player {
         if url.is_empty() {
             anyhow::bail!("no audio stream to play")
         }
-        let mut args = self.base_args();
-        args.push("--no-video".into());
-        args.push("--force-window=no".into());
-        args.extend(self.ytdl_args("ba/b"));
-        args.push(url.to_string());
-        self.spawn(args, "play-audio")
+        MpvInvocation::new("play-audio", &self.mpv_binary)
+            .args(self.base_args())
+            .arg("--no-video")
+            .arg("--force-window=no")
+            .args(self.ytdl_args("ba/b"))
+            .arg(url)
+            .run()
     }
 
     fn cookies_from_browser(&self) -> Option<&str> {
@@ -146,15 +146,91 @@ impl Player {
             format!("--msg-level={}", self.log_level),
         ]
     }
+}
 
-    fn spawn(&self, args: Vec<String>, action: &str) -> Result<()> {
+/// One mpv invocation.
+///
+/// Every start of mpv in this app goes through here - playback, audio-only
+/// playback and the `--version` probe behind the availability check - so
+/// there is exactly one place to read what mpv was asked to do, however many
+/// calls happen.
+pub struct MpvInvocation<'a> {
+    /// What this run is for; also the log tag: `play`, `play-audio`, `probe`.
+    action: &'a str,
+    /// The mpv executable exactly as configured, so the printout shows what
+    /// the user asked for rather than a resolved guess.
+    binary: &'a str,
+    args: Vec<String>,
+}
+
+impl<'a> MpvInvocation<'a> {
+    pub fn new(action: &'a str, binary: &'a str) -> Self {
+        Self {
+            action,
+            binary,
+            args: Vec::new(),
+        }
+    }
+
+    /// Adds one argument.
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    /// Adds several, keeping their order.
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// The argv: the executable first, exactly as it will be spawned.
+    fn argv(&self) -> Vec<String> {
+        let mut argv = Vec::with_capacity(self.args.len() + 1);
+        argv.push(self.binary.to_string());
+        argv.extend(self.args.iter().cloned());
+        argv
+    }
+
+    /// What gets printed: the call, then each argument on its own line.
+    ///
+    /// One line per argument because the `--ytdl-format` selectors carry
+    /// commas, slashes and spaces: packed into one string they cannot be
+    /// checked by eye, which is the whole reason for printing them.
+    fn printout(&self) -> Vec<String> {
+        let argv = self.argv();
+        let resolved = crate::yt::resolve_binary(self.binary)
+            .map(|path| format!(" (resolved: {})", path.display()))
+            .unwrap_or_default();
+        let mut lines = vec![format!(
+            "[mpv] {} :: {}{} with {} argument(s)",
+            self.action,
+            self.binary,
+            resolved,
+            argv.len() - 1
+        )];
+        for (index, arg) in argv.iter().enumerate() {
+            lines.push(format!("[mpv] {} ::   argv[{index}] = {arg}", self.action));
+        }
+        lines
+    }
+
+    /// Starts mpv, printing the invocation first, and hands the child to the
+    /// log forwarder.
+    pub fn run(&self) -> Result<()> {
+        print_lines(self.printout());
         log::info!(
-            "[mpv] {action} :: {} {}",
-            self.mpv_binary,
-            crate::yt::quote(&args)
+            "[mpv] {} :: {} {}",
+            self.action,
+            self.binary,
+            crate::yt::quote(&self.args)
         );
-        let child = Command::new(&self.mpv_binary)
-            .args(&args)
+        let child = Command::new(self.binary)
+            .args(&self.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -162,15 +238,46 @@ impl Player {
         match child {
             Ok(child) => {
                 let pid = child.id();
-                log::info!("[mpv] {action} :: started, pid={pid}");
-                watch(action, child);
+                log::info!("[mpv] {} :: started, pid={pid}", self.action);
+                print_lines([format!("[mpv] {} :: mpv pid={pid}", self.action)]);
+                watch(self.action, child);
                 Ok(())
             }
             Err(error) => {
-                log::error!("[mpv] {action} :: FAILED to launch: {error}");
-                Err(error).with_context(|| format!("could not launch {}", self.mpv_binary))
+                log::error!("[mpv] {} :: FAILED to launch: {error}", self.action);
+                Err(error).with_context(|| format!("could not launch {}", self.binary))
             }
         }
+    }
+
+    /// Runs mpv to completion and captures its output - for the probe, which
+    /// must not leak mpv's pipes into the app's.
+    pub fn output(&self) -> Result<Output> {
+        print_lines(self.printout());
+        log::info!(
+            "[mpv] {} :: {} {}",
+            self.action,
+            self.binary,
+            crate::yt::quote(&self.args)
+        );
+        Command::new(self.binary)
+            .args(&self.args)
+            .stderr(Stdio::null())
+            .output()
+            .with_context(|| format!("could not run {}", self.binary))
+    }
+}
+
+/// Lines on stdout.
+///
+/// Errors are dropped rather than propagated: a closed pipe (`magic-tape |
+/// head`) must not take the player down, and the stderr log still has
+/// everything that was printed.
+fn print_lines<I: IntoIterator<Item = String>>(lines: I) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    for line in lines {
+        let _ = writeln!(stdout, "{line}");
     }
 }
 
@@ -209,6 +316,10 @@ fn watch(action: &str, mut child: Child) {
     }
     drop(tx);
     let waiter = action.clone();
+    // Named in the exit lines: two mpv runs can overlap (play a video, then
+    // play another without closing the first), and without the pid there is
+    // nothing to tie an "exited normally" back to the invocation it belongs to.
+    let pid = child.id();
     std::thread::spawn(move || {
         for message in rx {
             let Some((level, line)) = message.split_once('|') else {
@@ -223,12 +334,21 @@ fn watch(action: &str, mut child: Child) {
         match child.wait() {
             Ok(status) => {
                 if status.success() {
-                    log::info!("[mpv] {waiter} :: exited normally ({status})");
+                    print_lines([format!("[mpv] {waiter} :: pid={pid} exited normally ({status})")]);
+                    log::info!("[mpv] {waiter} :: pid={pid} exited normally ({status})");
                 } else {
-                    log::error!("[mpv] {waiter} :: FAILED, mpv exited with {status}");
+                    print_lines([format!(
+                        "[mpv] {waiter} :: pid={pid} FAILED, mpv exited with {status}"
+                    )]);
+                    log::error!("[mpv] {waiter} :: pid={pid} FAILED, mpv exited with {status}");
                 }
             }
-            Err(error) => log::error!("[mpv] {waiter} :: could not wait for mpv: {error}"),
+            Err(error) => {
+                print_lines([format!(
+                    "[mpv] {waiter} :: pid={pid} could not wait for mpv: {error}"
+                )]);
+                log::error!("[mpv] {waiter} :: pid={pid} could not wait for mpv: {error}");
+            }
         }
     });
 }
@@ -289,5 +409,42 @@ mod tests {
         assert_eq!(player("  web  ").single_client().as_deref(), Some("web"));
         assert_eq!(player("").single_client(), None);
         assert_eq!(player("   ").single_client(), None);
+    }
+
+    #[test]
+    fn the_printout_lists_the_binary_and_every_argument_in_order() {
+        // The point of the wrapper: any invocation can be read back off the
+        // screen - the binary first, then each argument as it is passed.
+        let call = MpvInvocation::new("play", "mpv")
+            .args(["--force-window=yes", "--keep-open=no"])
+            .arg("https://www.youtube.com/watch?v=abc");
+        let lines = call.printout();
+        assert!(
+            lines[0].starts_with("[mpv] play :: mpv"),
+            "the header names the executable: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines[0].ends_with("with 3 argument(s)"),
+            "and counts them: {:?}",
+            lines[0]
+        );
+        assert_eq!(lines[1], "[mpv] play ::   argv[0] = mpv");
+        assert_eq!(lines[2], "[mpv] play ::   argv[1] = --force-window=yes");
+        assert_eq!(lines[3], "[mpv] play ::   argv[2] = --keep-open=no");
+        assert_eq!(
+            lines[4],
+            "[mpv] play ::   argv[3] = https://www.youtube.com/watch?v=abc",
+            "the url is the last argument, as mpv expects"
+        );
+        assert_eq!(lines.len(), 5, "one header line plus one line per argument");
+    }
+
+    #[test]
+    fn the_probe_prints_too() {
+        // Every mpv call goes through the wrapper, the availability probe
+        // included - that one used to be assembled on its own.
+        let call = MpvInvocation::new("probe", "mpv").arg("--version");
+        assert_eq!(call.argv(), vec!["mpv".to_string(), "--version".to_string()]);
     }
 }
