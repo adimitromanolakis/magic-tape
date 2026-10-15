@@ -933,7 +933,7 @@ mod live {
         let player = crate::player::Player::from_config(&config);
         let url = "https://www.youtube.com/watch?v=5C_HPTJg5ek";
         for profile in [
-            "22/bv*[height<=720]+ba/b[height<=720] / wv*+ba/w",
+            "bv*[height<=720]+ba/b[height<=720] / wv*+ba/w",
             "bv*[height<=1080]+ba/b[height<=1080] / wv*+ba/w",
         ] {
             println!("--- playing with {profile} ---");

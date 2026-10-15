@@ -486,7 +486,7 @@ impl App {
     /// Maps a quality button to a yt-dlp format selector.
     pub fn selector_for(&self, profile: &str) -> String {
         match profile {
-            "720p" => "22/bv*[height<=720]+ba/b[height<=720] / wv*+ba/w".to_string(),
+            "720p" => "bv*[height<=720]+ba/b[height<=720] / wv*+ba/w".to_string(),
             "1080p" => "bv*[height<=1080]+ba/b[height<=1080] / wv*+ba/w".to_string(),
             "audio" => "ba/b".to_string(),
             _ => self.config.download_video_quality.clone(),
