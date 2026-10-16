@@ -3,7 +3,11 @@ use eframe::egui;
 use crate::app::{App, Section, ToastKind};
 use crate::config::ListView;
 use crate::model::Video;
-use crate::ui::{accent, ellipsize, muted, warn_color, SCROLLBAR_GAP};
+use crate::ui::{
+    accent, ellipsize, live_color, muted, selected_fill, text_width, title_color, BADGE_RADIUS,
+    CARD_GAP, CARD_PAD, CARD_RADIUS, CARD_TEXT_H, CARD_TITLE_GAP, SCROLLBAR_GAP, T_CAPTION, T_META,
+    T_TITLE, THUMB_RADIUS,
+};
 
 /// Row geometry for the compact video list.
 ///
@@ -60,11 +64,14 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     let available = (ui.available_width() - SCROLLBAR_GAP).max(200.0);
     let columns = ((available / 260.0).floor() as usize).clamp(1, 6);
     app.columns = columns;
-    let tile = (available - 8.0 * (columns.saturating_sub(1)) as f32) / columns as f32;
-    let thumb_h = (tile - 12.0) * 9.0 / 16.0;
-    let card_h = thumb_h + 46.0;
+    let gap = CARD_GAP;
+    let tile = (available - gap * (columns.saturating_sub(1)) as f32) / columns as f32;
+    // The thumbnail keeps 16:9 inside the card's padding.
+    let inner_w = (tile - 2.0 * CARD_PAD).max(1.0);
+    let thumb_h = inner_w * 9.0 / 16.0;
+    let card_h = thumb_h + CARD_TEXT_H;
     let rows = count.div_ceil(columns);
-    let row_h = card_h + 8.0;
+    let row_h = card_h + gap;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("grid_scroll")
@@ -78,7 +85,7 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     scroll.show_rows(ui, row_h, rows, |ui, range| {
             for row in range {
                 ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.spacing_mut().item_spacing.x = gap;
                     for col in 0..columns {
                         let index = row * columns + col;
                         if index >= count {
@@ -96,6 +103,31 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     footer(app, ui);
 }
 
+/// Draws a small rounded label anchored at `at`, sized to its own text. The
+/// duration and the LIVE marker use it so they read as badges rather than as
+/// bare text floating over the picture.
+fn badge(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    align: egui::Align2,
+    at: egui::Pos2,
+    text: &str,
+    fill: egui::Color32,
+    text_color: egui::Color32,
+) {
+    let font = egui::FontId::proportional(T_CAPTION);
+    let size = egui::vec2(text_width(ui, text, &font), T_CAPTION) + egui::vec2(12.0, 4.0);
+    let rect = align.anchor_size(at, size);
+    painter.rect_filled(rect, BADGE_RADIUS, fill);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        font,
+        text_color,
+    );
+}
+
 fn grid_card(
     app: &mut App,
     ui: &mut egui::Ui,
@@ -104,56 +136,63 @@ fn grid_card(
     tile: f32,
     thumb_h: f32,
 ) {
-    let card_h = thumb_h + 46.0;
+    let card_h = thumb_h + CARD_TEXT_H;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(tile, card_h), egui::Sense::click());
     let selected = app.selected == Some(index);
-    let bg = if selected {
-        ui.visuals().widgets.active.bg_fill
+    let hovered = response.hovered();
+    let (bg, border, width) = if selected {
+        (selected_fill(ui.visuals()), accent(), 2.0)
+    } else if hovered {
+        (
+            ui.visuals().widgets.hovered.bg_fill,
+            ui.visuals().widgets.hovered.bg_stroke.color,
+            2.0,
+        )
     } else {
-        ui.visuals().panel_fill
-    };
-    let border = if selected {
-        accent()
-    } else {
-        ui.visuals().widgets.noninteractive.bg_stroke.color
+        (
+            ui.visuals().panel_fill,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+            1.0,
+        )
     };
     ui.painter().rect(
         rect,
-        8.0,
+        CARD_RADIUS,
         bg,
-        egui::Stroke::new(if selected { 2.0 } else { 1.0 }, border),
+        egui::Stroke::new(width, border),
         egui::StrokeKind::Inside,
     );
 
-    let inner = egui::Rect::from_min_max(
-        rect.left_top() + egui::vec2(6.0, 6.0),
-        rect.right_bottom() - egui::vec2(6.0, 6.0),
-    );
+    let inner = rect.shrink(CARD_PAD);
     let thumb_rect =
         egui::Rect::from_min_size(inner.left_top(), egui::vec2(inner.width(), thumb_h));
     let texture = app.thumbs.get(&video.id);
     egui::Image::new(&texture)
         .fit_to_exact_size(thumb_rect.size())
-        .corner_radius(6.0)
+        .corner_radius(THUMB_RADIUS)
         .paint_at(ui, thumb_rect);
 
     let painter = ui.painter();
     if let Some(duration) = &video.duration {
-        painter.text(
-            egui::pos2(thumb_rect.right() - 6.0, thumb_rect.bottom() - 6.0),
+        badge(
+            ui,
+            painter,
             egui::Align2::RIGHT_BOTTOM,
+            thumb_rect.right_bottom() - egui::vec2(6.0, 6.0),
             duration,
-            egui::FontId::proportional(11.0),
+            egui::Color32::from_black_alpha(190),
             egui::Color32::WHITE,
         );
     }
     if video.is_live {
-        painter.text(
-            egui::pos2(thumb_rect.left() + 8.0, thumb_rect.top() + 6.0),
+        badge(
+            ui,
+            painter,
             egui::Align2::LEFT_TOP,
+            thumb_rect.left_top() + egui::vec2(6.0, 6.0),
             "LIVE",
-            egui::FontId::proportional(11.0),
-            egui::Color32::RED,
+            live_color(),
+            egui::Color32::WHITE,
         );
     }
 
@@ -166,8 +205,8 @@ fn grid_card(
     )
     .on_hover_text(video.title.clone());
 
-    let title_font = egui::FontId::proportional(12.5);
-    let sub_font = egui::FontId::proportional(11.5);
+    let title_font = egui::FontId::proportional(T_TITLE);
+    let sub_font = egui::FontId::proportional(T_META);
     let detail = match (&video.published, video.views_label()) {
         (Some(published), Some(views)) => format!("{views} - {published}"),
         (None, Some(views)) => views,
@@ -182,11 +221,11 @@ fn grid_card(
     let title = ellipsize(ui, &video.title, &title_font, inner.width());
     let sub = ellipsize(ui, &sub, &sub_font, inner.width());
     painter.text(
-        egui::pos2(inner.left(), thumb_rect.bottom() + 15.0),
+        egui::pos2(inner.left(), thumb_rect.bottom() + CARD_TITLE_GAP),
         egui::Align2::LEFT_BOTTOM,
         title,
         title_font,
-        ui.visuals().text_color(),
+        title_color(ui.visuals()),
     );
     painter.text(
         egui::pos2(inner.left(), inner.bottom()),
@@ -245,7 +284,7 @@ fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(video.title.clone())
-                                        .size(13.0)
+                                        .size(T_TITLE)
                                         .strong(),
                                 )
                                 .truncate(),
@@ -262,7 +301,7 @@ fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
                                 meta.push_str(&format!(" - {duration}"));
                             }
                             ui.add(
-                                egui::Label::new(egui::RichText::new(meta).size(11.5).color(muted()))
+                                egui::Label::new(egui::RichText::new(meta).size(T_META).color(muted()))
                                     .truncate(),
                             );
                         });
@@ -419,17 +458,17 @@ fn channel_list(app: &mut App, ui: &mut egui::Ui) {
                     );
                 }
                 child.add_space(4.0);
-                let font = egui::FontId::proportional(12.5);
+                let font = egui::FontId::proportional(T_TITLE);
                 let label = ellipsize(&child, &channel.name, &font, inner.width());
                 child.add(
-                    egui::Label::new(egui::RichText::new(label).size(12.5).strong())
+                    egui::Label::new(egui::RichText::new(label).size(T_TITLE).strong())
                         .truncate(),
                 );
                 if let Some(subs) = &channel.subscribers {
                     child.label(
                         egui::RichText::new(format!("{subs} subscribers"))
-                            .size(11.0)
-                            .color(warn_color()),
+                            .size(T_META)
+                            .color(muted()),
                     );
                 }
 
@@ -490,7 +529,7 @@ fn footer(app: &mut App, ui: &mut egui::Ui) {
                 rows(app),
                 if start > 0 { format!(" (from {start})") } else { String::new() }
             ))
-            .size(11.5)
+            .size(T_META)
             .color(muted()),
         );
         if app.feed_state.loading {

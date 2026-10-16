@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::{App, ToastKind};
-use crate::ui::{muted, ok_color};
+use crate::ui::{muted, ok_color, T_BODY, T_CAPTION, T_META};
 
 pub fn render(app: &mut App, ctx: &egui::Context) {
     let area = egui::Area::new(egui::Id::new("toast_area"))
@@ -22,7 +22,7 @@ pub fn render(app: &mut App, ctx: &egui::Context) {
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_max_width(360.0);
-                    ui.label(egui::RichText::new(&toast.text).size(12.0).color(color));
+                    ui.label(egui::RichText::new(&toast.text).size(T_BODY).color(color));
                 });
             index += 1;
             if index >= 4 {
@@ -37,19 +37,12 @@ pub fn status_bar(app: &App, ui: &mut egui::Ui) {
         if app.worker.busy() {
             ui.add(egui::Spinner::new().size(13.0));
         } else {
-            ui.label(egui::RichText::new("idle").size(11.0).color(muted()));
+            ui.label(egui::RichText::new("idle").size(T_CAPTION).color(muted()));
         }
         ui.label(
             egui::RichText::new(app.status.clone())
-                .size(11.5)
+                .size(T_META)
                 .color(muted()),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(format!("uptime {:.0}s", app.started.elapsed().as_secs()))
-                    .size(11.0)
-                    .color(muted()),
-            );
-        });
     });
 }

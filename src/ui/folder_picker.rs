@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, ToastKind};
-use crate::ui::{accent, muted};
+use crate::ui::{accent, input, muted, T_BODY, T_CAPTION};
 
 pub struct FolderPicker {
     /// The folder currently being listed.
@@ -309,12 +309,15 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             // Path bar: type anywhere and go.
             ui.horizontal(|ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut picker.typed)
-                        .id_source("picker_path")
-                        .hint_text("/mnt, ~/Videos, /run/media/user/disk")
-                        .desired_width(ui.available_width() - 60.0),
-                );
+                let field_width = ui.available_width() - 60.0;
+                let response = input(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut picker.typed)
+                            .id_source("picker_path")
+                            .hint_text("/mnt, ~/Videos, /run/media/user/disk")
+                            .desired_width(field_width),
+                    )
+                });
                 // Enter has to work while the box still has focus: the old
                 // check waited for focus to be *lost*, which is exactly what
                 // clicking Go does, so pressing Enter did nothing at all.
@@ -357,7 +360,7 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.label(
-                            egui::RichText::new("PLACES").size(10.5).color(muted()),
+                            egui::RichText::new("PLACES").size(T_CAPTION).color(muted()),
                         );
                         egui::ScrollArea::vertical()
                             .id_salt("picker_places")
@@ -376,7 +379,7 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                                 if !volumes.is_empty() {
                                     ui.add_space(6.0);
                                     ui.label(
-                                        egui::RichText::new("VOLUMES").size(10.5).color(muted()),
+                                        egui::RichText::new("VOLUMES").size(T_CAPTION).color(muted()),
                                     );
                                     for volume in &volumes {
                                         let name = volume
@@ -414,7 +417,7 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(picker.current.display().to_string())
-                                    .size(12.0)
+                                    .size(T_BODY)
                                     .strong(),
                             );
                         });
@@ -441,7 +444,7 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
                                 if dirs.is_empty() {
                                     ui.label(
                                         egui::RichText::new("No subfolders here")
-                                            .size(12.0)
+                                            .size(T_BODY)
                                             .color(muted()),
                                     );
                                 }
@@ -470,11 +473,13 @@ pub fn picker_window(app: &mut App, ctx: &egui::Context) {
 
             ui.separator();
             ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut picker.new_folder)
-                        .hint_text("new folder name")
-                        .desired_width(160.0),
-                );
+                input(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut picker.new_folder)
+                            .hint_text("new folder name")
+                            .desired_width(160.0),
+                    )
+                });
                 if ui
                     .add(icon_button_label(
                         app,

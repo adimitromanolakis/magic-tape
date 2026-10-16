@@ -92,6 +92,7 @@ Rules that keep this sane:
 | `src/ui/settings.rs` | 396 | Settings window (4 tabs) + shortcuts window |
 | `src/ui/toasts.rs` | 54 | Toast overlay (anchored below the toolbar) + status bar |
 | `src/ui/mod.rs` | 60 | Colors, `card()`, text measurement and `ellipsize()` |
+| `src/ui/theme.rs` | 121 | Design tokens: the type scale and the card metrics |
 
 ### Data on disk
 
@@ -130,6 +131,15 @@ back. UI size is a `Context::set_zoom_factor`, not a `TextStyle` edit, because t
 of its own text with explicit `FontId`s that a style change would miss. Both are applied from
 `MagicTape::apply_font_change` in `logic()`, which only reinstalls when the setting actually changed,
 the same trick as the theme.
+
+**Typography** — every text size comes from `ui::theme` (`T_APP`, `T_PAGE`, `T_TITLE`, `T_BODY`,
+`T_META`, `T_CAPTION`), and every card radius, padding and gap from the same module's `CARD_*`
+constants. Do not reintroduce a literal `.size(..)` on text: the scale is what keeps the grid, the
+compact list, the channel cards, the sidebar, the detail pane and the settings window consistent.
+The only literal sizes left in `src/ui` are spinner diameters. Note that egui has no bold face -
+`RichText::strong()` only swaps in `strong_text_color()` (white on dark, black on light) - so a
+"bolder" title means a larger size plus that colour, which is what `theme::title_color` does for
+the grid card.
 
 **The query belongs to the search feed** — `App::query` used to be a free-floating
 string that every request read. `yt::list_feed` matched `(Some(q), _)`, so once a term was
@@ -324,6 +334,13 @@ This is a new API surface; several things differ from older tutorials.
     Changing a row's content height means changing the matching constant, not the literal passed
     to `show_rows`.
 
+15. **The bundled proportional font has no `←`.** egui's fallback chain for proportional text is
+    Ubuntu-Light -> NotoEmoji -> emoji-icon-font, and U+2190 (`←`) is in none of them: it exists
+    only in Hack, the monospace face. So `"← Back"` drew a missing-glyph box. Use a glyph the
+    chain actually covers - `⬅` (U+2B05), `➡` (U+27A1), `◀`/`▶` (U+25C0/U+25B6) and `↩` (U+21A9)
+    all render. The toolbar standardises on the `⬅`/`➡` pair for paging, so those arrows match the
+    Back button instead of the flat triangles.
+
 ### 6.4 Verifying changes on this machine
 
 - **The real X display is `:0`** (Xorg + KWin, AMD Radeon RX 6750 XT, VA-API). `DISPLAY` is
@@ -393,6 +410,7 @@ allowed through it, action commands are not.
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
+| Design tokens | `the_type_scale_is_ordered_from_caption_to_app`, `the_card_text_zone_holds_a_title_over_a_meta_line`, `a_selected_fill_stays_a_tint_of_the_accent` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
 | The feed has videos in it | `live_feed_has_videos`, `live_search_has_videos` (both opt-in: they need the network and a signed-in browser) |
 | Fetch permits | `a_permit_is_returned_when_the_job_finishes`, `the_pool_holds_the_line_at_its_limit`, `raising_the_limit_lets_waiting_jobs_through`, `a_limit_of_zero_is_treated_as_one` |

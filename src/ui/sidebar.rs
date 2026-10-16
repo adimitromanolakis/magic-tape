@@ -2,7 +2,9 @@ use eframe::egui;
 
 use crate::app::{App, Section};
 use crate::model::{DurationFilter, Feed};
-use crate::ui::{accent, card, ellipsize, muted, SCROLLBAR_GAP};
+use crate::ui::{
+    accent, card, ellipsize, input, muted, SCROLLBAR_GAP, T_APP, T_BODY, T_CAPTION, T_META, T_TITLE,
+};
 use crate::yt;
 
 pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
@@ -10,14 +12,14 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("magic-tape")
-                .size(20.0)
+                .size(T_APP)
                 .strong()
                 .color(accent()),
         );
     });
     ui.label(
         egui::RichText::new(format!("yt-dlp {}", app.ytdlp_version))
-            .size(11.0)
+            .size(T_CAPTION)
             .color(muted()),
     );
     ui.add_space(8.0);
@@ -45,7 +47,7 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
     ui.separator();
     ui.label(
         egui::RichText::new("QUICK ACCESS")
-            .size(10.0)
+            .size(T_CAPTION)
             .color(muted()),
     );
     subscriptions_panel(app, ui);
@@ -56,7 +58,7 @@ fn nav(app: &mut App, ui: &mut egui::Ui, label: &str, section: Section) {
     let response = ui
         .selectable_label(
             selected,
-            egui::RichText::new(label).strong().size(14.0),
+            egui::RichText::new(label).strong().size(T_TITLE),
         )
         .on_hover_text("Open section");
     if response.clicked() {
@@ -97,7 +99,7 @@ fn nav(app: &mut App, ui: &mut egui::Ui, label: &str, section: Section) {
 fn feed_item(app: &mut App, ui: &mut egui::Ui, feed: Feed, label: &str) {
     let selected = app.section == Section::Feeds && app.feed == feed;
     let response = ui
-        .selectable_label(selected, egui::RichText::new(label).size(13.0))
+        .selectable_label(selected, egui::RichText::new(label).size(T_BODY))
         .on_hover_text(format!("Open the {label} feed"));
     if response.clicked() {
         app.select(None);
@@ -154,12 +156,15 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     let total = app.subscriptions.len();
 
     if total > FILTER_THRESHOLD {
-        ui.add(
-            egui::TextEdit::singleline(&mut app.subs_filter)
-                .hint_text("Filter channels...")
-                .desired_width(ui.available_width())
-                .font(egui::TextStyle::Small),
-        );
+        input(ui, |ui| {
+            let width = ui.available_width();
+            ui.add(
+                egui::TextEdit::singleline(&mut app.subs_filter)
+                    .hint_text("Filter channels...")
+                    .desired_width(width)
+                    .font(egui::TextStyle::Small),
+            )
+        });
         ui.add_space(2.0);
     }
 
@@ -177,7 +182,7 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new("No subscriptions imported yet")
-                        .size(12.0)
+                        .size(T_BODY)
                         .color(muted()),
                 );
                 if ui.button("Import from YouTube").clicked() {
@@ -194,7 +199,7 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
     if matching == 0 {
         ui.label(
             egui::RichText::new("No channel matches that filter")
-                .size(12.0)
+                .size(T_BODY)
                 .color(muted()),
         );
     } else {
@@ -217,7 +222,7 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
                 // `show_rows` was told about - which is what the scrollbar is
                 // calibrated from.
                 let width = (ui.available_width() - SCROLLBAR_GAP).max(60.0);
-                let font = egui::FontId::proportional(12.5);
+                let font = egui::FontId::proportional(T_BODY);
                 let paint_font = font.clone();
                 let text = ui.visuals().text_color();
                 for index in range {
@@ -264,7 +269,7 @@ fn subscriptions_panel(app: &mut App, ui: &mut egui::Ui) {
             } else {
                 format!("{total} subscriptions")
             })
-            .size(11.5)
+            .size(T_META)
             .color(muted()),
         );
         if ui.button("Import subscriptions").clicked() {

@@ -3,9 +3,14 @@ pub mod folder_picker;
 pub mod icons;
 pub mod settings;
 pub mod sidebar;
+pub mod theme;
 pub mod toasts;
 pub mod toolbar;
 pub mod video_list;
+
+// The design tokens are re-exported flat so call sites read `crate::ui::T_TITLE`
+// rather than `crate::ui::theme::T_TITLE`.
+pub use theme::*;
 
 use eframe::egui;
 
@@ -50,6 +55,43 @@ pub const SEARCH_INPUT_ID: &str = "main_search";
 pub fn focus_search_input(ui: &egui::Ui) {
     ui.ctx()
         .memory_mut(|memory| memory.request_focus(egui::Id::new(SEARCH_INPUT_ID)));
+}
+
+/// Draws a text field with [`theme::INPUT_RADIUS`] instead of the wider radius
+/// the buttons use.
+///
+/// egui paints a `TextEdit`'s fill, border and focus ring with the corner
+/// radius of `visuals.widgets.*`, and a `Style` has no per-widget-type radius,
+/// so the radius is overridden for the extent of `add`. Handing `TextEdit` a
+/// `Frame` would be simpler, but a custom frame replaces the frame egui paints
+/// - the fill colour and the focus ring go with it.
+pub fn input<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        let radius = egui::CornerRadius::same(INPUT_RADIUS as u8);
+        let widgets = &mut ui.style_mut().visuals.widgets;
+        for visuals in [
+            &mut widgets.inactive,
+            &mut widgets.hovered,
+            &mut widgets.active,
+            &mut widgets.open,
+        ] {
+            visuals.corner_radius = radius;
+        }
+        add(ui)
+    })
+    .inner
+}
+
+/// True when a text field's contents should be taken as submitted: the button
+/// beside it was clicked, or Enter was pressed with the field focused.
+/// Enter is checked against the field's own response rather than globally,
+/// because the app-wide key handler maps Enter to "play the selection"; that
+/// shortcut is dropped while a field has focus, so nothing else would pick the
+/// key up.
+pub fn submitted(ui: &egui::Ui, field: &egui::Response, clicked: bool) -> bool {
+    clicked
+        || (ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && (field.has_focus() || field.lost_focus()))
 }
 
 pub fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {

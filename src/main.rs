@@ -73,6 +73,10 @@ impl MagicTape {
     fn new(cc: &eframe::CreationContext<'_>, startup: Startup) -> Self {
         let mut app = App::new(&cc.egui_ctx, startup);
         app.list_view = app.config.list_view;
+        // Roomier controls than egui's cramped default (4, 1). Applied to both
+        // themes so a theme switch keeps it.
+        cc.egui_ctx
+            .all_styles_mut(|style| style.spacing.button_padding = egui::vec2(10.0, 5.0));
         let applied_font = Some((app.config.ui_font.clone(), app.config.ui_zoom));
         Self {
             app,
@@ -93,6 +97,14 @@ fn visuals_for(theme: Theme) -> egui::Visuals {
         egui::Color32::from_gray(if theme == Theme::Light { 205 } else { 60 });
     visuals.selection.bg_fill = accent().gamma_multiply(0.35);
     visuals.hyperlink_color = accent();
+    // Rounded controls everywhere: buttons, chips and combo boxes take the same
+    // radius, so the chrome reads as one family rather than sharp default boxes.
+    let rounding = egui::CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = rounding;
+    visuals.widgets.inactive.corner_radius = rounding;
+    visuals.widgets.hovered.corner_radius = rounding;
+    visuals.widgets.active.corner_radius = rounding;
+    visuals.widgets.open.corner_radius = rounding;
     visuals
 }
 

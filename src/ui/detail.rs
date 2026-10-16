@@ -2,7 +2,7 @@ use eframe::egui;
 
 use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, PinnedPlacement};
-use crate::ui::{accent, muted, ok_color, warn_color};
+use crate::ui::{accent, muted, ok_color, warn_color, T_BODY, T_CAPTION, T_META, T_TITLE};
 
 pub fn detail_panel(app: &mut App, _ctx: &egui::Context, root: &mut egui::Ui) {
     let Some(video) = app.current_video() else {
@@ -29,12 +29,12 @@ pub fn detail_panel(app: &mut App, _ctx: &egui::Context, root: &mut egui::Ui) {
                 });
                 ui.add_space(6.0);
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&video.title).size(14.0).strong())
+                    egui::Label::new(egui::RichText::new(&video.title).size(T_TITLE).strong())
                         .wrap(),
                 );
                 ui.label(
                     egui::RichText::new(&video.channel)
-                        .size(12.0)
+                        .size(T_BODY)
                         .color(muted()),
                 );
                 let mut meta = String::new();
@@ -54,7 +54,7 @@ pub fn detail_panel(app: &mut App, _ctx: &egui::Context, root: &mut egui::Ui) {
                     meta.push_str(duration);
                 }
                 if !meta.is_empty() {
-                    ui.label(egui::RichText::new(meta).size(11.5).color(muted()));
+                    ui.label(egui::RichText::new(meta).size(T_META).color(muted()));
                 }
                 ui.add_space(4.0);
                 actions(app, ui, &video.url);
@@ -73,7 +73,7 @@ fn actions(app: &mut App, ui: &mut egui::Ui, url: &str) {
         for (label, profile) in [("1080p", "1080p"), ("720p", "720p"), ("Best", "best")] {
             let response = ui.add_sized(
                 [86.0, 26.0],
-                egui::Button::new(egui::RichText::new(label).size(12.0).strong()),
+                egui::Button::new(egui::RichText::new(label).size(T_BODY).strong()),
             );
             if response.clicked() {
                 app.play_selected(profile);
@@ -161,14 +161,14 @@ fn meta_row(app: &mut App, ui: &mut egui::Ui, video: &crate::model::Video) {
     if video.is_upcoming {
         ui.label(
             egui::RichText::new("This is an upcoming premiere")
-                .size(11.5)
+                .size(T_META)
                 .color(warn_color()),
         );
     }
 }
 
 fn description(app: &App, ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new("DESCRIPTION").size(11.0).color(muted()));
+    ui.label(egui::RichText::new("DESCRIPTION").size(T_CAPTION).color(muted()));
     let text = if app.detail.description.is_empty() {
         if app.detail.loading {
             "Loading...".to_string()
@@ -192,7 +192,7 @@ fn description(app: &App, ui: &mut egui::Ui) {
         &text,
         0.0,
         egui::TextFormat {
-            font_id: egui::FontId::proportional(12.0),
+            font_id: egui::FontId::proportional(T_BODY),
             color,
             ..Default::default()
         },
@@ -204,7 +204,7 @@ fn comments(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("COMMENTS ({})", app.detail.comment_count))
-                .size(11.0)
+                .size(T_CAPTION)
                 .color(muted()),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -239,7 +239,7 @@ fn comments(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("Pinned comment")
-                .size(11.5)
+                .size(T_META)
                 .color(muted()),
         );
         ui.add(
@@ -261,7 +261,7 @@ fn comments(app: &mut App, ui: &mut egui::Ui) {
     });
 
     if let Some(error) = &app.detail.error {
-        ui.label(egui::RichText::new(error).size(11.5).color(egui::Color32::RED));
+        ui.label(egui::RichText::new(error).size(T_META).color(egui::Color32::RED));
         return;
     }
     if app.detail.loading {
@@ -271,7 +271,7 @@ fn comments(app: &mut App, ui: &mut egui::Ui) {
     if app.detail.comments.is_empty() {
         ui.label(
             egui::RichText::new("No comments loaded")
-                .size(11.5)
+                .size(T_META)
                 .color(muted()),
         );
         return;
@@ -311,27 +311,27 @@ fn comment_card(ui: &mut egui::Ui, comment: &crate::model::Comment) {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&comment.author)
-                        .size(12.0)
+                        .size(T_BODY)
                         .strong()
                         .color(accent()),
                 );
                 if comment.is_pinned {
                     ui.label(
                         egui::RichText::new("pinned")
-                            .size(10.0)
+                            .size(T_CAPTION)
                             .color(warn_color()),
                     );
                 }
                 ui.label(
                     egui::RichText::new(&comment.time_text)
-                        .size(10.5)
+                        .size(T_CAPTION)
                         .color(muted()),
                 );
             });
-            ui.add(egui::Label::new(egui::RichText::new(&comment.text).size(11.8)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(&comment.text).size(T_BODY)).wrap());
             ui.label(
                 egui::RichText::new(format!("{} likes", comment.like_count))
-                    .size(10.5)
+                    .size(T_CAPTION)
                     .color(ok_color()),
             );
         });

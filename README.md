@@ -83,6 +83,11 @@ of egui's built-ins rather than replacing them, so a font without CJK or emoji g
 those characters through the fallbacks. The size slider scales the whole interface, including the
 text the app paints itself.
 
+Every text size comes from a single type scale, so the video grid, the compact list, the channel
+cards, the sidebar and the detail pane all step through the same sizes. There is no synthetic bold:
+a title is made prominent with a larger size and the theme's strongest text colour, so "bold" here
+means brighter and bigger rather than a heavier face.
+
 ## Keyboard
 
 | Key | Action |

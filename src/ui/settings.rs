@@ -3,7 +3,7 @@ use eframe::egui;
 use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, ListView, PinnedPlacement, Theme};
 use crate::model::Feed;
-use crate::ui::{accent, muted, warn_color};
+use crate::ui::{accent, input, muted, warn_color, T_CAPTION, T_META, T_TITLE};
 
 pub fn theme_label(theme: Theme) -> &'static str {
     match theme {
@@ -28,7 +28,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                     if ui
                         .selectable_label(
                             app.settings_tab == index,
-                            egui::RichText::new(*label).size(13.0),
+                            egui::RichText::new(*label).size(T_TITLE),
                         )
                         .clicked()
                     {
@@ -60,7 +60,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.label(
                         egui::RichText::new(app.paths.config_file.to_string_lossy())
-                            .size(10.5)
+                            .size(T_CAPTION)
                             .color(muted()),
                     );
                 });
@@ -73,10 +73,12 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
     ui.label("Browsing");
     egui::Grid::new("general_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label("Browser for cookies");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.config.cookies_from_browser)
-                .desired_width(220.0),
-        );
+        input(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.config.cookies_from_browser)
+                    .desired_width(220.0),
+            )
+        });
         ui.end_row();
         ui.label("Videos per page");
         ui.add(egui::Slider::new(&mut app.config.list_length, 1..=99).text("videos"));
@@ -116,7 +118,7 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
             egui::RichText::new(
                 "Cookies from your browser let magic-tape read your private feeds, history and subscriptions.",
             )
-            .size(11.5)
+            .size(T_META)
             .color(muted()),
         )
         .wrap(),
@@ -166,11 +168,13 @@ fn font_controls(app: &mut App, ui: &mut egui::Ui) {
                 {
                     app.config.ui_font.clear();
                 }
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.font_filter)
-                        .hint_text("filter fonts...")
-                        .desired_width(220.0),
-                );
+                input(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut app.font_filter)
+                            .hint_text("filter fonts...")
+                            .desired_width(220.0),
+                    )
+                });
                 ui.separator();
                 let needle = app.font_filter.to_lowercase();
                 for path in fonts.iter().filter(|path| {
@@ -189,7 +193,7 @@ fn font_controls(app: &mut App, ui: &mut egui::Ui) {
             });
         ui.label(
             egui::RichText::new(format!("{} installed", crate::font::discovered().len()))
-                .size(11.0)
+                .size(T_CAPTION)
                 .color(muted()),
         );
     });
@@ -216,9 +220,9 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     ui.label("mpv");
     ui.horizontal(|ui| {
         ui.label("Binary");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.config.mpv_binary).desired_width(160.0),
-        );
+        input(ui, |ui| {
+            ui.add(egui::TextEdit::singleline(&mut app.config.mpv_binary).desired_width(160.0))
+        });
         if ui.button("Test").clicked() {
             let player = crate::player::Player::new(&app.config.mpv_binary, false);
             if player.available() {
@@ -231,26 +235,30 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     ui.checkbox(&mut app.config.play_in_fullscreen, "Open videos fullscreen");
     ui.horizontal(|ui| {
         ui.label("mpv log level");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.config.mpv_log_level)
-                .desired_width(160.0)
-                .font(egui::TextStyle::Monospace),
-        );
+        input(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.config.mpv_log_level)
+                    .desired_width(160.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+        });
     });
     ui.horizontal(|ui| {
         ui.label("yt-dlp client");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.config.playback_client)
-                .desired_width(160.0)
-                .font(egui::TextStyle::Monospace),
-        );
+        input(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.config.playback_client)
+                    .desired_width(160.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+        });
     });
     ui.add(
         egui::Label::new(
             egui::RichText::new(
                 "Which YouTube client mpv uses for playback. `web_embedded` returns URLs that ffmpeg cannot fetch (HTTP 403), so it is left out. Leave empty to let yt-dlp decide.",
             )
-            .size(11.5)
+            .size(T_META)
             .color(muted()),
         )
         .wrap(),
@@ -260,11 +268,13 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     ui.label("Downloads");
     ui.horizontal(|ui| {
         ui.label("Folder");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.config.download_directory)
-                .desired_width(220.0)
-                .hint_text("/Downloads, /tmp/youtube, ~/Videos"),
-        );
+        input(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.config.download_directory)
+                    .desired_width(220.0)
+                    .hint_text("/Downloads, /tmp/youtube, ~/Videos"),
+            )
+        });
         if ui
             .button("Browse...")
             .on_hover_text("Pick a folder from the filesystem")
@@ -281,7 +291,7 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     ui.add(
         egui::Label::new(
             egui::RichText::new(format!("Downloads go to {}", resolved.display()))
-                .size(11.0)
+                .size(T_CAPTION)
                 .color(muted()),
         )
         .wrap(),
@@ -298,11 +308,13 @@ fn playback(app: &mut App, ui: &mut egui::Ui) {
     ui.label(
         egui::RichText::new("Format selector used by the Best button (yt-dlp syntax)").color(muted()),
     );
-    ui.add(
-        egui::TextEdit::singleline(&mut app.config.download_video_quality)
-            .desired_width(400.0)
-            .font(egui::TextStyle::Monospace),
-    );
+    input(ui, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.config.download_video_quality)
+                .desired_width(400.0)
+                .font(egui::TextStyle::Monospace),
+        )
+    });
     ui.label(
         egui::RichText::new("Examples: bv*[height<=1080]+ba  -  bestaudio/best  -  22").color(muted()),
     );
@@ -365,7 +377,7 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
             "{} subscriptions stored locally",
             app.subscriptions.len()
         ))
-        .size(11.5)
+        .size(T_META)
         .color(muted()),
     );
     if ui.button("Import subscriptions from YouTube").clicked() {
@@ -409,7 +421,7 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
             app.thumbs.cached_count(),
             app.paths.thumb_dir.display()
         ))
-        .size(11.5)
+        .size(T_META)
         .color(muted()),
     );
     if ui.button("Clear thumbnail cache").clicked() {
@@ -430,7 +442,7 @@ fn maintenance(app: &mut App, ui: &mut egui::Ui) {
                 "How many downloads may run at once. Comments are always limited to one, \
                  because paging the grid would otherwise start a run per video."
             )
-            .size(11.0)
+            .size(T_CAPTION)
             .color(muted()),
         )
         .wrap(),
@@ -507,7 +519,7 @@ fn cookies(app: &mut App, ui: &mut egui::Ui) {
                 "No browser configured - public browsing only. Your subscriptions feed \
                  needs one.",
             )
-            .size(11.5)
+            .size(T_META)
             .color(warn_color()),
         );
         return;
@@ -517,7 +529,7 @@ fn cookies(app: &mut App, ui: &mut egui::Ui) {
             "Cookies are read from {browser} whenever a request needs to be signed in. \
              Public searches skip them entirely, which is most of the speed."
         ))
-        .size(11.5),
+        .size(T_META),
     );
     if ui
         .button("Check the subscription feed")
