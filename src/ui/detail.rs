@@ -2,31 +2,165 @@ use eframe::egui;
 
 use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, PinnedPlacement};
-use crate::ui::{accent, muted, ok_color, warn_color, T_BODY, T_CAPTION, T_META, T_TITLE};
+use crate::ui::{
+    accent, muted, ok_color, pane_fill, warn_color, SCROLLBAR_GAP, T_BODY, T_CAPTION, T_META,
+    T_TITLE,
+};
 
-pub fn detail_panel(app: &mut App, _ctx: &egui::Context, root: &mut egui::Ui) {
-    let Some(video) = app.current_video() else {
+/// Narrowest and widest the rail can be dragged to.
+const MIN_WIDTH: f32 = 260.0;
+const MAX_WIDTH: f32 = 620.0;
+/// Pointer width of the grab strip on the pane's left edge.
+const HANDLE_WIDTH: f32 = 5.0;
+/// Height of the band the thumbnail is centred in at the top of the pane.
+const THUMB_HEIGHT: f32 = 170.0;
+
+/// The detail pane: a rail anchored to the window's right edge, full height.
+///
+/// It is an `Area` rather than a `Panel::right`, and that is what keeps the
+/// grid still: `grid()` derives its column count from the central panel's
+/// width, so a panel would resize every card and move every row each time the
+/// selection changed. This rail is drawn over the list's right-most column
+/// instead. It starts below the toolbar, so no control is ever covered, and
+/// runs to the window's bottom edge over the right end of the status bar,
+/// which is what the panel it replaced did.
+pub fn detail_panel(app: &mut App, ctx: &egui::Context) {
+    if !app.detail_open {
+        return;
+    }
+    let Some(selected) = app.current_video() else {
         return;
     };
     if app.detail.video.is_none() {
-        app.detail.video = Some(video.clone());
+        app.detail.video = Some(selected.clone());
     }
-    let video = app.detail.video.clone().unwrap_or(video);
+    let video = app.detail.video.clone().unwrap_or(selected);
+    // Where the list drew itself this frame; without it there is nothing to
+    // anchor to yet.
+    let Some(area) = app.content_rect else {
+        return;
+    };
 
-    egui::Panel::right("detail")
-        .resizable(true)
-        .default_size(340.0)
-        .min_size(260.0)
-        .show(root, |ui| {
+    let window = ctx.content_rect();
+    let width = app
+        .detail_width
+        .clamp(MIN_WIDTH, MAX_WIDTH.min((window.width() / 2.0).max(MIN_WIDTH)));
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(window.right() - width, area.top()),
+        window.right_bottom(),
+    );
+
+    egui::Area::new(egui::Id::new("detail_pane"))
+        // Above the panels, which all share the base layer, and below windows,
+        // popups and tooltips - the order the pane had as a panel.
+        .order(egui::Order::Middle)
+        .fixed_pos(rect.min)
+        .fade_in(false)
+        .show(ctx, |ui| pane(app, ui, &video, rect));
+}
+
+/// The rail itself: a fixed-size frame, clipped to `rect`, holding one
+/// scrolling column with the close button floating over its top.
+fn pane(app: &mut App, ui: &mut egui::Ui, video: &crate::model::Video, rect: egui::Rect) {
+    ui.set_min_size(rect.size());
+    ui.set_max_size(rect.size());
+    let fill = pane_fill(&app.config.detail_background, ui.visuals());
+    // Almost no top margin: the picture is the first thing in the pane, and the
+    // close button floats over it instead of claiming a row of its own.
+    let frame = egui::Frame::new().fill(fill).inner_margin(egui::Margin {
+        left: 12,
+        right: 12,
+        top: 6,
+        bottom: 8,
+    });
+    let inner = rect.size() - frame.total_margin().sum();
+    frame.show(ui, |ui| {
+        ui.scope(|ui| {
+            ui.set_min_size(inner);
+            // A panel clipped what overflowed it; an area does not.
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            body(app, ui, video);
+        });
+        resize_strip(app, ui, inner);
+    });
+    // After the scroller, so the button is painted over the picture and stays
+    // where it is while the details scroll beneath it.
+    close_button(app, ui, rect);
+    // The separator a panel draws between itself and the list beside it.
+    ui.painter().vline(
+        rect.left(),
+        rect.y_range(),
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    );
+}
+
+/// The close affordance, floating in the pane's top-right corner.
+///
+/// It is painted, not laid out, so the picture can start at the top of the
+/// pane. The cross is two line segments rather than a glyph: egui has no bold
+/// face (`RichText::strong()` only swaps in a brighter colour), so a heavier X
+/// means a heavier stroke. It carries its own dark disc because it sits over a
+/// photograph, where the theme's text colour is not readable.
+fn close_button(app: &mut App, ui: &mut egui::Ui, pane: egui::Rect) {
+    /// Hit area - generous, since the cross itself is only drawn lines.
+    const SIZE: f32 = 20.0;
+    /// Half the width of the cross.
+    const ARM: f32 = 4.0;
+    const WEIGHT: f32 = 3.2;
+    /// Gap between the button and the pane's corner.
+    const INSET_X: f32 = 10.0;
+    const INSET_Y: f32 = 3.0;
+
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(pane.right() - INSET_X - SIZE, pane.top() + INSET_Y),
+        egui::vec2(SIZE, SIZE),
+    );
+    let response = ui.interact(rect, egui::Id::new("detail_close"), egui::Sense::click());
+    let hovered = response.hovered() || response.is_pointer_button_down_on();
+    // Dark enough at rest to hold a white cross over a white page - the light
+    // theme's pane fill is close to the glyph's own colour - and darker still
+    // under the pointer.
+    let disc = if hovered {
+        egui::Color32::from_black_alpha(190)
+    } else {
+        egui::Color32::from_black_alpha(20)
+    };
+    let color = if hovered {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_white_alpha(225)
+    };
+    ui.painter().circle_filled(rect.center(), SIZE / 2.0, disc);
+    let center = rect.center();
+    let stroke = egui::Stroke::new(WEIGHT, color);
+    for (x, y) in [(-1.0, -1.0), (-1.0, 1.0)] {
+        let corner = egui::vec2(ARM * x, ARM * y);
+        ui.painter()
+            .line_segment([center + corner, center - corner], stroke);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.clicked() {
+        app.detail_open = false;
+    }
+    let _ = response.on_hover_text("Hide the details pane");
+}
+
+/// The pane's content: one column in one scroller. The comments used to have a
+/// scroller of their own inside a pane that could not scroll at all, which left
+/// everything below the fold unreachable.
+fn body(app: &mut App, ui: &mut egui::Ui, video: &crate::model::Video) {
+    let scroll = egui::ScrollArea::vertical()
+        .id_salt("detail_scroll")
+        .auto_shrink([false, false]);
+    scroll.show(ui, |ui| {
+        ui.scope(|ui| {
+            // egui draws its scrollbar over the content, so keep the column
+            // clear of the bar rather than letting text run under it.
+            ui.set_max_width((ui.available_width() - SCROLLBAR_GAP).max(80.0));
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    let texture = app.thumbs.get(&video.id);
-                    ui.add(
-                        egui::Image::new(&texture)
-                            .fit_to_exact_size(egui::vec2(ui.available_width() - 8.0, 170.0))
-                            .corner_radius(8.0),
-                    );
-                });
+                thumbnail(app, ui, &video.id);
                 ui.add_space(6.0);
                 ui.add(
                     egui::Label::new(egui::RichText::new(&video.title).size(T_TITLE).strong())
@@ -59,13 +193,55 @@ pub fn detail_panel(app: &mut App, _ctx: &egui::Context, root: &mut egui::Ui) {
                 ui.add_space(4.0);
                 actions(app, ui, &video.url);
                 ui.add_space(4.0);
-                meta_row(app, ui, &video);
+                meta_row(app, ui, video);
                 ui.separator();
                 description(app, ui);
                 ui.separator();
                 comments(app, ui);
             });
         });
+    });
+}
+
+/// The picture at the top of the pane, centred in its band.
+///
+/// The frame keeps its own shape and is *not* stretched to fill the pane: a
+/// 16:9 thumbnail forced into a tall box is squashed on a narrow pane and
+/// stretched on a wide one, and neither reads as deliberate. The band keeps its
+/// height whatever the picture's shape, so everything below it stays put while
+/// thumbnails arrive.
+fn thumbnail(app: &App, ui: &mut egui::Ui, id: &str) {
+    let texture = app.thumbs.get(id);
+    let available = ui.available_width().max(80.0);
+    let band = egui::vec2(available, THUMB_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(band, egui::Sense::hover());
+    let size = texture.size_vec2();
+    if size.x <= 0.0 || size.y <= 0.0 {
+        return;
+    }
+    let scale = (band.x / size.x).min(band.y / size.y);
+    let target = egui::Rect::from_center_size(rect.center(), size * scale);
+    egui::Image::new(&texture)
+        .fit_to_exact_size(target.size())
+        .corner_radius(8.0)
+        .paint_at(ui, target);
+}
+
+/// The grab strip on the pane's left edge: dragging left widens the pane, as
+/// dragging the old panel's edge did.
+fn resize_strip(app: &mut App, ui: &mut egui::Ui, size: egui::Vec2) {
+    let rect = egui::Rect::from_min_size(ui.min_rect().min, size);
+    let strip = egui::Rect::from_min_max(
+        rect.left_top(),
+        egui::pos2(rect.left() + HANDLE_WIDTH, rect.bottom()),
+    );
+    let response = ui.interact(strip, egui::Id::new("detail_resize"), egui::Sense::drag());
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if response.dragged() {
+        app.detail_width = (app.detail_width - response.drag_delta().x).clamp(MIN_WIDTH, MAX_WIDTH);
+    }
 }
 
 fn actions(app: &mut App, ui: &mut egui::Ui, url: &str) {
@@ -291,15 +467,10 @@ fn comments(app: &mut App, ui: &mut egui::Ui) {
         ordered.extend(pinned);
     }
 
-    egui::ScrollArea::vertical()
-        .id_salt("comments_scroll")
-        .max_height(320.0)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for comment in ordered {
-                comment_card(ui, &comment);
-            }
-        });
+    // No scroller of its own: the whole pane scrolls as one page.
+    for comment in ordered {
+        comment_card(ui, &comment);
+    }
 }
 
 fn comment_card(ui: &mut egui::Ui, comment: &crate::model::Comment) {

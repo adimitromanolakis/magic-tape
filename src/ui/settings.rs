@@ -3,7 +3,9 @@ use eframe::egui;
 use crate::app::{App, ToastKind};
 use crate::config::{CommentsSort, ListView, PinnedPlacement, Theme};
 use crate::model::Feed;
-use crate::ui::{accent, input, muted, warn_color, T_CAPTION, T_META, T_TITLE};
+use crate::ui::{
+    accent, input, muted, pane_fill, parse_hex_color, warn_color, T_CAPTION, T_META, T_TITLE,
+};
 
 pub fn theme_label(theme: Theme) -> &'static str {
     match theme {
@@ -128,6 +130,8 @@ fn general(app: &mut App, ui: &mut egui::Ui) {
     ui.label("Appearance");
     font_controls(app, ui);
     ui.add_space(8.0);
+    pane_background(app, ui);
+    ui.add_space(8.0);
 
     ui.label("Notifications");
     ui.checkbox(&mut app.config.notification_enabled, "Show desktop notifications");
@@ -214,6 +218,67 @@ fn font_controls(app: &mut App, ui: &mut egui::Ui) {
             app.config.ui_zoom = 1.0;
         }
     });
+}
+
+/// The detail pane's background: a hex colour, or the theme's panel fill.
+///
+/// A text box rather than a grid of swatches, because the point is to try a
+/// colour and watch the pane change as it is typed. The swatch beside it shows
+/// what the setting resolves to, and the presets are there for a first click.
+fn pane_background(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.label("Detail pane background");
+        input(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.config.detail_background)
+                    .hint_text("#RRGGBB, empty for the theme")
+                    .desired_width(170.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+        });
+        let (rect, _response) =
+            ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::hover());
+        let corner = egui::CornerRadius::same(4);
+        ui.painter().rect_filled(
+            rect,
+            corner,
+            pane_fill(&app.config.detail_background, ui.visuals()),
+        );
+        ui.painter().rect_stroke(
+            rect,
+            corner,
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+        if ui
+            .small_button("Theme")
+            .on_hover_text("Back to the theme's panel colour")
+            .clicked()
+        {
+            app.config.detail_background.clear();
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Try").size(T_META).color(muted()));
+        for (label, value) in [
+            ("near-black", "#0d0d11"),
+            ("charcoal", "#1b1b22"),
+            ("slate", "#23232c"),
+            ("wine", "#241418"),
+        ] {
+            if ui.small_button(label).clicked() {
+                app.config.detail_background = value.to_string();
+            }
+        }
+    });
+    if !app.config.detail_background.trim().is_empty()
+        && parse_hex_color(&app.config.detail_background).is_none()
+    {
+        ui.colored_label(
+            egui::Color32::from_rgb(0xE0, 0x50, 0x50),
+            "Not a colour - use #RRGGBB",
+        );
+    }
 }
 
 fn playback(app: &mut App, ui: &mut egui::Ui) {

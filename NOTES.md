@@ -44,7 +44,8 @@ Single window, single-threaded UI, all slow work on worker threads.
 ```
    main.rs ── eframe event loop
       │  logic()  → drain worker results into App state, repaint while busy
-      │  ui()     → Panel::left(sidebar) / Panel::right(detail) / bottom(status) / CentralPanel
+      │  ui()     → Panel::left(sidebar) / bottom(status) / CentralPanel
+      │             + the detail pane, an `Area` floating over the list (§6.3.16)
       ▼
    app.rs (App)  ── the only mutable state: config, selection, feed, section, detail
       │  spawns jobs, applies Outcome
@@ -75,24 +76,24 @@ Rules that keep this sane:
 
 | File | Lines | Responsibility |
 | --- | --- | --- |
-| `src/main.rs` | 352 | Window/panel composition, CLI args, key handling, selection movement |
-| `src/app.rs` | 1082 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
-| `src/model.rs` | 643 | `Video`/`Channel`/`Comment` types + **all** yt-dlp JSON parsing, time/number formatting |
-| `src/yt.rs` | 411 | The yt-dlp command line; one `run()` that logs everything; per-video comment files; URL encode/decode |
-| `src/player.rs` | 293 | mpv invocation, log forwarding, exit-status watcher, notifications, `opener` |
-| `src/store.rs` | 366 | Watch history, liked, search history, last action, subscriptions, thumb paths |
-| `src/tasks.rs` | 114 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
+| `src/main.rs` | 437 | Window/panel composition, CLI args, key handling, selection movement |
+| `src/app.rs` | 1883 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
+| `src/model.rs` | 645 | `Video`/`Channel`/`Comment` types + **all** yt-dlp JSON parsing, time/number formatting |
+| `src/yt.rs` | 990 | The yt-dlp command line; one `run()` that logs everything; per-video comment files; URL encode/decode |
+| `src/player.rs` | 443 | mpv invocation, log forwarding, exit-status watcher, notifications, `opener` |
+| `src/store.rs` | 456 | Watch history, liked, search history, last action, subscriptions, thumb paths |
+| `src/tasks.rs` | 403 | `Outcome` enum, `Worker` (thread + mpsc), thumbnail download |
 | `src/font.rs` | 225 | Font discovery and installation, UI scale |
-| `src/thumbs.rs` | 74 | Thumbnail texture cache, placeholder, in-flight de-duplication |
-| `src/config.rs` | 323 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
-| `src/ui/sidebar.rs` | 277 | Nav, feed list, subscription quick access, replay-previous-action |
-| `src/ui/toolbar.rs` | 228 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
-| `src/ui/video_list.rs` | 427 | Virtualised grid, compact list, channel list, context menus, empty state |
-| `src/ui/detail.rs` | 338 | Right panel: thumbnail, action buttons, description, comments |
-| `src/ui/settings.rs` | 396 | Settings window (4 tabs) + shortcuts window |
-| `src/ui/toasts.rs` | 54 | Toast overlay (anchored below the toolbar) + status bar |
-| `src/ui/mod.rs` | 60 | Colors, `card()`, text measurement and `ellipsize()` |
-| `src/ui/theme.rs` | 121 | Design tokens: the type scale and the card metrics |
+| `src/thumbs.rs` | 291 | Thumbnail texture cache, placeholder, in-flight de-duplication |
+| `src/config.rs` | 466 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
+| `src/ui/sidebar.rs` | 292 | Nav, feed list, subscription quick access, replay-previous-action |
+| `src/ui/toolbar.rs` | 304 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
+| `src/ui/video_list.rs` | 544 | Virtualised grid, compact list, channel list, context menus, empty state |
+| `src/ui/detail.rs` | 510 | Detail rail: picture, action buttons, description, comments, floating close button |
+| `src/ui/settings.rs` | 654 | Settings window (4 tabs) + shortcuts window |
+| `src/ui/toasts.rs` | 47 | Toast overlay (anchored below the toolbar) + status bar |
+| `src/ui/mod.rs` | 122 | Colors, `card()`, text measurement and `ellipsize()` |
+| `src/ui/theme.rs` | 192 | Design tokens: the type scale, the card metrics, colour parsing |
 
 ### Data on disk
 
@@ -341,6 +342,36 @@ This is a new API surface; several things differ from older tutorials.
     all render. The toolbar standardises on the `⬅`/`➡` pair for paging, so those arrows match the
     Back button instead of the flat triangles.
 
+16. **The detail pane is an `Area`, not a `Panel::right`, and that is load-bearing.** As a panel it
+    took its width out of the central panel, so selecting a video changed the grid's column count
+    (`grid()` derives it from `available_width()`), resized every card and moved every row - and
+    clearing the selection put them all back, which made clicking through a feed flash the layout.
+    An area of its own leaves the grid's width, and therefore its geometry and scroll offset,
+    untouched; it covers the right-most column instead, which is why it carries a close button.
+    It is drawn as a rail: `App::content_rect` supplies the top edge (the rect the list was given,
+    so the toolbar is never covered) and `Context::content_rect()` the flush right edge and the
+    bottom, over the right end of the status bar, as the panel was. Three consequences: the pane's
+    size has to be forced with `ui.set_min_size` + `ui.set_max_size`, because an area otherwise
+    sizes itself to its content and would grow over the status bar; the layering works out like the
+    panel's did, since every panel shares the window's base layer, so `Order::Middle` puts the area
+    above the grid and still below windows, popups and tooltips; and `Context` has no `style()` in
+    0.35 - take the style from a `Ui`.
+
+    The pane has **one** scroller: a scroller per section (comments had their own) left the rest of
+    the pane unreachable. `ui.set_max_width(available - SCROLLBAR_GAP)` inside it keeps text clear
+    of the bar egui draws over its content (§12). Its fill comes from `config.detail_background`
+    through `ui::pane_fill()`, which falls back to the theme's panel fill when the setting is empty
+    or unparsable.
+
+    The close button is **painted, not laid out** - `Frame`, then `body()`, then `close_button()` -
+    so the picture can start at the top of the pane instead of under a caption row. Painting it
+    after the scroller also puts it on top of the picture and keeps it there while the details
+    scroll beneath it, and a later `ui.interact` on the same rect wins the hit test against the
+    scroller underneath, which is what makes the button clickable at all. It draws its own dark
+    disc because it sits over a photograph, where `Visuals::text_color` is not readable, and the
+    cross is two `line_segment`s rather than a glyph: egui has no bold face, so `RichText::strong()`
+    only brightens text and a heavier X has to be a heavier stroke.
+
 ### 6.4 Verifying changes on this machine
 
 - **The real X display is `:0`** (Xorg + KWin, AMD Radeon RX 6750 XT, VA-API). `DISPLAY` is
@@ -378,7 +409,10 @@ allowed through it, action commands are not.
 
 **Change the grid layout** — `ui/video_list.rs::grid` owns column count (currently
 `(available / 260).clamp(1, 6)`), tile width, thumbnail aspect and row height. Cards are
-`grid_card`, which allocates its own rect; keep the allocation or §6.3.4 returns.
+`grid_card`, which allocates its own rect; keep the allocation or §6.3.4 returns. The count is
+read from the central panel's width and nothing else: the detail pane is an overlay (§6.3.16), so
+no part of this may depend on whether it is open. `grid()` logs a `[grid]` line whenever the count
+changes, which is the quickest way to catch a layout that moves on its own.
 
 ## 8. Known limitations and open threads
 
@@ -409,8 +443,9 @@ allowed through it, action commands are not.
 | Parsing edge cases | `parses_playlist_object_with_entries`, `parses_bare_array_and_ndjson`, `skips_null_entries`, `ignores_query_strings_on_thumbnails`, `parses_live_status_and_release_timestamp`, `empty_input_is_not_an_error` |
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
+| Detail pane state | `a_selection_shows_the_detail_pane_and_clearing_it_hides_the_pane` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
-| Design tokens | `the_type_scale_is_ordered_from_caption_to_app`, `the_card_text_zone_holds_a_title_over_a_meta_line`, `a_selected_fill_stays_a_tint_of_the_accent` |
+| Design tokens | `the_type_scale_is_ordered_from_caption_to_app`, `the_card_text_zone_holds_a_title_over_a_meta_line`, `a_selected_fill_stays_a_tint_of_the_accent`, `a_colour_setting_takes_the_forms_a_person_would_type`, `an_unusable_colour_setting_leaves_the_pane_on_the_theme` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |
 | The feed has videos in it | `live_feed_has_videos`, `live_search_has_videos` (both opt-in: they need the network and a signed-in browser) |
 | Fetch permits | `a_permit_is_returned_when_the_job_finishes`, `the_pool_holds_the_line_at_its_limit`, `raising_the_limit_lets_waiting_jobs_through`, `a_limit_of_zero_is_treated_as_one` |

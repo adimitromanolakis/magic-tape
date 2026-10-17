@@ -101,6 +101,15 @@ pub struct App {
     pub feed_state: FeedState,
     pub selected: Option<usize>,
     pub detail: Detail,
+    /// Width of the floating detail pane, dragged by its left edge.
+    pub detail_width: f32,
+    /// Whether the pane is shown. The button in its corner hides it without
+    /// clearing the selection, so the grid column it covers is reachable again.
+    pub detail_open: bool,
+    /// The rect the video list was given on the last frame. The detail pane
+    /// floats over exactly that area, which is what keeps the grid's geometry
+    /// independent of it.
+    pub content_rect: Option<egui::Rect>,
     pub search_input: String,
     /// Set by `Ctrl+F`; the toolbar consumes it by focusing the search box.
     pub focus_search: bool,
@@ -193,6 +202,9 @@ impl App {
             feed_state: FeedState::default(),
             selected: None,
             detail: Default::default(),
+            detail_width: 340.0,
+            detail_open: false,
+            content_rect: None,
             status: "Ready".into(),
             toasts: VecDeque::new(),
             show_settings: false,
@@ -600,6 +612,7 @@ impl App {
             self.scroll_to_index = index;
         }
         self.selected = index;
+        self.detail_open = index.is_some();
         self.detail = Default::default();
         self.comments_pending = None;
         self.comments_settled_at = None;
@@ -1768,6 +1781,25 @@ mod tests {
         app.take_scroll_offset(1, 70.0, 300.0);
         app.select(Some(2));
         assert_eq!(app.scroll_to_index, None, "same index needs no scrolling");
+    }
+
+    #[test]
+    fn a_selection_shows_the_detail_pane_and_clearing_it_hides_the_pane() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        assert!(!app.detail_open, "nothing selected, nothing to show");
+
+        app.select(Some(1));
+        assert!(app.detail_open, "selecting a video shows its details");
+
+        // What the pane's close button does: hide the pane but keep the
+        // selection, so the grid column it covers is reachable again.
+        app.detail_open = false;
+        assert_eq!(app.selected, Some(1));
+
+        app.select(Some(1));
+        assert!(app.detail_open, "selecting again brings it back");
+        app.select(None);
+        assert!(!app.detail_open, "clearing the selection closes it too");
     }
 }
 

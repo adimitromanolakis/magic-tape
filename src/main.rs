@@ -184,8 +184,6 @@ impl eframe::App for MagicTape {
                     .show(ui, |ui| sidebar::sidebar(&mut self.app, ui));
             });
 
-        detail::detail_panel(&mut self.app, &ctx, ui);
-
         egui::Panel::bottom("status")
             .exact_size(26.0)
             .show(ui, |ui| toasts::status_bar(&self.app, ui));
@@ -200,8 +198,14 @@ impl eframe::App for MagicTape {
                 ui.add_space(6.0);
                 toolbar::toolbar(&mut self.app, ui);
                 ui.separator();
+                // The list reports the area it is given, so the detail pane can
+                // float over exactly that — and never over the toolbar.
+                self.app.content_rect = Some(ui.available_rect_before_wrap());
                 video_list::content(&mut self.app, ui);
             });
+
+        // After the list, so the pane's rect is the one measured this frame.
+        detail::detail_panel(&mut self.app, &ctx);
 
         settings::settings_window(&mut self.app, &ctx);
         crate::ui::folder_picker::picker_window(&mut self.app, &ctx);

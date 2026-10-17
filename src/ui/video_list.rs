@@ -63,6 +63,10 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     // width that is left once its strip is removed.
     let available = (ui.available_width() - SCROLLBAR_GAP).max(200.0);
     let columns = ((available / 260.0).floor() as usize).clamp(1, 6);
+    // Logged on change, so a layout that moves on its own leaves a trace.
+    if app.columns != columns {
+        log::info!("[grid] {columns} column(s) in {available:.0}px");
+    }
     app.columns = columns;
     let gap = CARD_GAP;
     let tile = (available - gap * (columns.saturating_sub(1)) as f32) / columns as f32;

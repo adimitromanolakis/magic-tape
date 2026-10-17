@@ -65,6 +65,9 @@ pub struct Config {
     pub colored_messages: bool,
     pub list_view: ListView,
     pub theme: Theme,
+    /// Background of the detail pane, as `#RRGGBB`. Empty means the theme's
+    /// panel fill, which is what the rest of the chrome uses.
+    pub detail_background: String,
     pub ui_font: String,
     pub ui_zoom: f32,
     pub play_in_fullscreen: bool,
@@ -101,6 +104,7 @@ impl Default for Config {
             colored_messages: true,
             list_view: ListView::Grid,
             theme: Theme::Dark,
+            detail_background: String::new(),
             ui_font: String::new(),
             ui_zoom: 1.0,
             play_in_fullscreen: true,

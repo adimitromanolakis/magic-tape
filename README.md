@@ -132,6 +132,16 @@ magic-tape --feed trending                  # subscriptions | trending | recomme
 magic-tape --help
 ```
 
+### The detail pane
+
+The pane is a rail anchored to the right edge, full height, and it is drawn *over* the grid rather
+than taking a column from it - so selecting a video leaves the grid's column count, card size and
+scroll position exactly where they were. Its whole content scrolls as one page; the video's picture
+sits at the top of the pane, fitted to the pane's width without being stretched, and `×` floats over
+its top-right corner, where it stays while the details scroll and hides the pane without losing the
+selection - which is how the column it covers comes back. The pane's left edge can be dragged to
+resize it. See `detail_background` below for its colour.
+
 ### Keyboard shortcuts
 
 | Key | Action |
@@ -208,6 +218,7 @@ values are imported once as defaults.
 | `pinned_comments` | `first` or `last` |
 | `list_view` | `grid` or `list` |
 | `theme` | `dark`, `light`, `system` |
+| `detail_background` | background of the detail rail as `#RRGGBB`; empty follows the theme's panel colour |
 | `ui_font` | path or name of an installed font; empty keeps egui's built-in font |
 | `ui_zoom` | UI scale, 0.7 - 2.0 |
 | `mpv_binary`, `ytdlp_binary` | override the executables |

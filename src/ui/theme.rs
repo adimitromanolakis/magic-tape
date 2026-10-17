@@ -71,6 +71,38 @@ pub fn selected_fill(visuals: &egui::Visuals) -> egui::Color32 {
     accent().gamma_multiply(if visuals.dark_mode { 0.30 } else { 0.18 })
 }
 
+/// Reads a colour setting: `#RRGGBB`, `RRGGBB`, or the three-digit shorthand.
+///
+/// A typo returns `None` rather than a guess, so a half-written value in the
+/// settings box cannot paint the pane in a colour nobody asked for.
+pub fn parse_hex_color(setting: &str) -> Option<egui::Color32> {
+    let text = setting.trim().trim_start_matches('#');
+    let digit = |c: char| c.to_digit(16).map(|d| d as u8);
+    let mut channels = [0u8; 3];
+    match text.len() {
+        3 => {
+            for (channel, c) in channels.iter_mut().zip(text.chars()) {
+                // 0xF -> 0xFF: the shorthand doubles each digit.
+                *channel = digit(c)? * 17;
+            }
+        }
+        6 => {
+            for (channel, pair) in channels.iter_mut().zip(text.as_bytes().chunks(2)) {
+                *channel = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+            }
+        }
+        _ => return None,
+    }
+    Some(egui::Color32::from_rgb(
+        channels[0], channels[1], channels[2],
+    ))
+}
+
+/// Fill of the detail pane: the configured colour, or the theme's panel fill.
+pub fn pane_fill(setting: &str, visuals: &egui::Visuals) -> egui::Color32 {
+    parse_hex_color(setting).unwrap_or(visuals.panel_fill)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +133,36 @@ mod tests {
             assert!(fill.r() <= base.r() && fill.g() <= base.g() && fill.b() <= base.b());
             assert_ne!(fill, egui::Color32::TRANSPARENT);
         }
+    }
+
+    #[test]
+    fn a_colour_setting_takes_the_forms_a_person_would_type() {
+        let expected = egui::Color32::from_rgb(0x10, 0x20, 0x30);
+        for setting in ["#102030", "102030", "  #102030  ", "#102030\n"] {
+            assert_eq!(parse_hex_color(setting), Some(expected), "{setting:?}");
+        }
+        assert_eq!(
+            parse_hex_color("#123"),
+            Some(egui::Color32::from_rgb(0x11, 0x22, 0x33)),
+            "the shorthand doubles each digit"
+        );
+    }
+
+    #[test]
+    fn an_unusable_colour_setting_leaves_the_pane_on_the_theme() {
+        let visuals = egui::Visuals::dark();
+        for setting in ["", "   ", "nonsense", "#12345", "#1234567", "#12345g", "#"] {
+            assert_eq!(parse_hex_color(setting), None, "{setting:?} is not a colour");
+            assert_eq!(
+                pane_fill(setting, &visuals),
+                visuals.panel_fill,
+                "{setting:?} should follow the theme"
+            );
+        }
+        assert_eq!(
+            pane_fill("#101014", &visuals),
+            egui::Color32::from_rgb(0x10, 0x10, 0x14)
+        );
     }
 
     #[test]
