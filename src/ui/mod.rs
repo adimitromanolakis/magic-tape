@@ -94,6 +94,39 @@ pub fn submitted(ui: &egui::Ui, field: &egui::Response, clicked: bool) -> bool {
             && (field.has_focus() || field.lost_focus()))
 }
 
+/// Draws a spinner filling `rect`.
+///
+/// `egui::Spinner` sweeps its arc between nothing and 240 degrees as time
+/// passes, so a frame caught at the wrong moment is a blank square: a
+/// screenshot of the end-of-feed button's loading state showed the caption and
+/// no spinner at all. This keeps a constant sweep and only rotates it, so it
+/// always reads as in progress.
+pub fn spinner_at(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    ui.request_repaint(); // it is animated
+    let radius = (rect.width().min(rect.height()) / 2.0 - 1.5).max(1.0);
+    let sweep = 260f64.to_radians();
+    let start = ui.input(|i| i.time) * std::f64::consts::TAU;
+    let points: Vec<egui::Pos2> = (0..=24)
+        .map(|step| {
+            let angle = start + sweep * (step as f64 / 24.0);
+            rect.center() + radius * egui::vec2(angle.cos() as f32, angle.sin() as f32)
+        })
+        .collect();
+    ui.painter()
+        .add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
+}
+
+/// Allocates a square for [`spinner_at`] and draws it, for the places that
+/// want a spinner as a row item rather than at a known rect.
+pub fn spinner(ui: &mut egui::Ui, size: f32, color: egui::Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    spinner_at(ui, rect, color);
+    response
+}
+
 pub fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
     let font = font.clone();
     ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, egui::Color32::WHITE))

@@ -150,6 +150,15 @@ is never left on screen looking like the answer to the click. Loading a *page* i
 round: the next page is appended to what is already there, and the list, the selection and the
 scroll position stay where they were.
 
+### Loading more
+
+A feed ends in a round accent button with a down arrow, tucked just under its last row, so the end
+of the list is somewhere you can act rather than a dead stop; the footer's `Next` and the `.` key
+fetch the same page from anywhere in the list. Under the pointer the arrow drops and a ring fades
+in around the button, and clicking it puts a spinner in the arrow's place while the page is on its
+way. The page is appended, so nothing above it moves. A feed with nothing left closes with a short
+rule instead - the button never carries text.
+
 ### Keyboard shortcuts
 
 | Key | Action |

@@ -88,11 +88,11 @@ Rules that keep this sane:
 | `src/config.rs` | 466 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
 | `src/ui/sidebar.rs` | 292 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 304 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
-| `src/ui/video_list.rs` | 562 | Virtualised grid, compact list, channel list, context menus, empty state |
+| `src/ui/video_list.rs` | 744 | Virtualised grid, compact list, channel list, context menus, empty state, end-of-feed button |
 | `src/ui/detail.rs` | 510 | Detail rail: picture, action buttons, description, comments, floating close button |
 | `src/ui/settings.rs` | 654 | Settings window (4 tabs) + shortcuts window |
 | `src/ui/toasts.rs` | 47 | Toast overlay (anchored below the toolbar) + status bar |
-| `src/ui/mod.rs` | 122 | Colors, `card()`, text measurement and `ellipsize()` |
+| `src/ui/mod.rs` | 155 | Colors, `card()`, `spinner_at()`, text measurement and `ellipsize()` |
 | `src/ui/theme.rs` | 192 | Design tokens: the type scale, the card metrics, colour parsing |
 
 ### Data on disk
@@ -401,6 +401,42 @@ This is a new API surface; several things differ from older tutorials.
     the measurement), so the block's height is subtracted from the available height and half the
     remainder added above it.
 
+18. **The end of a feed is a row of the scroller, not a bar under it.** Paging existed only as the
+    footer's `Next` and the `.` key, so the bottom of a feed was a dead stop. `video_list::feed_tail`
+    draws a round button in a row of its own, appended to the row count (`rows + 1`), which is the
+    only way to put it *after* the last card: `ScrollArea::show_rows` only renders the rows it is
+    told about, so anything drawn after it would sit in a separate scroller.
+
+    Three details make that work. The row is allocated at exactly the `row_h` the scroller was
+    calibrated with - a shorter allocation would leave the last row's height disagreeing with
+    `show_rows`' bookkeeping - and the button is pinned `TAIL_GAP` below the row's top edge rather
+    than centred in it: a row is as tall as a tile row, so centring left about 120px of air between
+    the last tiles and the button, which read as a gap in the feed rather than the end of it. The
+    rest of the row is still air, but it is *below* the button, where it reads as padding.
+    `ui.interact` is called on the button's rect rather than the row, so that air is not a click
+    target. And the state is `tail_state(loading, has_more)`, in that order: `load_next_page` refuses
+    while a page is in flight, so offering a button then would be a click that does nothing.
+
+    It carries no label. The first version was a full-width tinted strip reading `Load 20 more`, and
+    it was too heavy: a whole row of colour and a sentence to buy one click, in the place where the
+    list is already ending. The arrow is the affordance, the page size it would have printed is in
+    the footer's `Next` and in the status line while a page loads, and the hover text says the rest.
+
+    Everything is painted, not styled from a `Button`: a 46pt circle filled with an accent wash
+    (`Color32::from_rgba_unmultiplied`, so the panel shows through rather than a block of colour) and
+    ringed in accent; the arrow is `tail_arrow`, a shaft plus a chevron head, both strokes. An SVG
+    icon set would mean an SVG rasteriser (`resvg`/`usvg` and its tree) for one 16pt glyph - the same
+    trade the detail pane's close cross settled the other way, with two `line_segment`s. Hover fades
+    in over 120ms (`animate_bool_with_time`): the circle grows 2px, a ring appears 5px outside it, and
+    the arrow drops 2.5px, so the pointer's arrival points where the click goes. `Tail::End` has no
+    button at all - a 44x2 muted rule closes the list the way a line under a signature does.
+
+    The spinner needs `ui::spinner_at`, not `egui::Spinner`: egui's sweeps its arc between nothing
+    and 240 degrees as `time.sin()` passes through zero, and the frame grabbed at 0.8s into a page
+    load caught it blank - caption, no spinner. `spinner_at` keeps a constant 260 degrees and only
+    rotates it, so it always reads as in progress; the empty state and the footer spinner use it
+    too, so there is one spinner in the app rather than two behaviours.
+
 ### 6.4 Verifying changes on this machine
 
 - **The real X display is `:0`** (Xorg + KWin, AMD Radeon RX 6750 XT, VA-API). `DISPLAY` is
@@ -431,6 +467,26 @@ This is a new API surface; several things differ from older tutorials.
   it landed. The block's bbox wobbled between samples (y 339, 330, 345), which is the spinner
   turning. Counting ink is also what caught the caption's placement: the first version stacked it
   at the top of the panel, y 120.
+- **Find a painted control by what it alone paints.** The end-of-feed button has no widget to query;
+  it is the only accent-coloured thing below the last card row, so scanning y 600..752 of the content
+  for `r - b >= 18` and taking the bbox gives its centre and its size, and the click can land on the
+  drawn button rather than on guessed coordinates. The last run: 48x48 at rest centred on x 790.5 -
+  the content width less `SCROLLBAR_GAP` - and 52x52 under the pointer, with a glow ring at x 760
+  and 821, the fill rising from (51,22,33) to (77,26,42) and the arrow 2.5px lower; clicking it put
+  `--playlist-start 21` in the log. Where it lands depends on the row and on `TAIL_GAP`: the grid's
+  205px row and the compact list's 76px row put it at different heights, so a scan window that stops
+  short of the viewport bottom finds one and not the other. Read the circle from a row and a column
+  profile through its centre, not from a bbox: the hover tooltip is drawn inside the same scan region
+  and swallows it.
+  In the light theme the same profile reads fill (238,209,219), border (234,134,161), arrow
+  (230,46,92). Two traps, both hit: wheel scrolling alone cannot reach the bottom of a 9000px feed,
+  and `End` *does* reach it but selects the last video, whose detail pane then covers the bottom
+  row's right-hand side.
+- **A feed rarely "ends" on demand.** `has_more` is `returned >= page size`, so a search keeps
+  answering `--playlist-start` past 280 items rather than running out (14 pages without reaching
+  the end), and `list_length` is clamped to 99 while a search page returns ~100 - so the `End`
+  state (§6.3.18) is not reachable by raising the page size. Only its phase logic is unit-tested;
+  its drawing was not caught on screen.
 - Screenshot with `import -window <id> out.png` (ImageMagick is installed).
 
 ## 7. Change playbooks
@@ -486,6 +542,7 @@ changes, which is the quickest way to catch a layout that moves on its own.
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Detail pane state | `a_selection_shows_the_detail_pane_and_clearing_it_hides_the_pane` |
 | Feed loading | `a_load_from_the_top_empties_the_list_while_it_runs`, `loading_a_later_page_keeps_the_list_on_screen`, `an_answer_overtaken_by_a_newer_load_is_dropped` |
+| End of feed | `a_page_in_flight_turns_the_end_of_the_feed_into_progress` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Design tokens | `the_type_scale_is_ordered_from_caption_to_app`, `the_card_text_zone_holds_a_title_over_a_meta_line`, `a_selected_fill_stays_a_tint_of_the_accent`, `a_colour_setting_takes_the_forms_a_person_would_type`, `an_unusable_colour_setting_leaves_the_pane_on_the_theme` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |

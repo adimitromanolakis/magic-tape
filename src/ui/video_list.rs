@@ -29,6 +29,16 @@ const CHANNEL_CARD_TEXT_H: f32 = 40.0;
 /// the middle of it in the middle of the panel.
 const LOADING_BLOCK_H: f32 = 50.0;
 
+/// Diameter of the round button that closes a feed.
+const TAIL_BUTTON: f32 = 46.0;
+/// Space above the button, between the last tile row and the button itself.
+/// The tail row is as tall as every other row (§6.3.18), so this is what decides
+/// how close to the tiles the button sits; everything below it is that row's
+/// leftover height.
+const TAIL_GAP: f32 = 12.0;
+/// The spinner that replaces the arrow while a page is being fetched.
+const TAIL_SPINNER: f32 = 18.0;
+
 pub fn content(app: &mut App, ui: &mut egui::Ui) {
     match app.section {
         Section::Channels => channel_list(app, ui),
@@ -80,6 +90,10 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     let card_h = thumb_h + CARD_TEXT_H;
     let rows = count.div_ceil(columns);
     let row_h = card_h + gap;
+    // The button that closes the feed is a row of the scroller itself, not a
+    // bar under it: the end of the list is where a reader who wants more
+    // already is, and a row is what the scroll area was calibrated for.
+    let tail = app.section == Section::Feeds;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("grid_scroll")
@@ -90,8 +104,12 @@ fn grid(app: &mut App, ui: &mut egui::Ui, count: usize) {
     };
     app.visible_rows = (viewport / row_h).floor().max(1.0) as usize;
 
-    scroll.show_rows(ui, row_h, rows, |ui, range| {
+    scroll.show_rows(ui, row_h, rows + usize::from(tail), |ui, range| {
             for row in range {
+                if tail && row == rows {
+                    feed_tail(app, ui, available, row_h);
+                    continue;
+                }
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     for col in 0..columns {
@@ -251,18 +269,24 @@ fn list(app: &mut App, ui: &mut egui::Ui, count: usize) {
     // the grid would multiply every page step by the old column count.
     app.columns = 1;
     let row_h = LIST_ROW_H;
+    let list_w = (ui.available_width() - SCROLLBAR_GAP).max(200.0);
+    let tail = app.section == Section::Feeds;
     let viewport = ui.available_height();
     let scroll = egui::ScrollArea::vertical()
         .id_salt("list_scroll")
         .auto_shrink([false, false])
-        .max_width((ui.available_width() - SCROLLBAR_GAP).max(200.0));
+        .max_width(list_w);
     let scroll = match app.take_scroll_offset(1, row_h, viewport) {
         Some(offset) => scroll.vertical_scroll_offset(offset),
         None => scroll,
     };
     app.visible_rows = (viewport / row_h).floor().max(1.0) as usize;
-    scroll.show_rows(ui, row_h, count, |ui, range| {
+    scroll.show_rows(ui, row_h, count + usize::from(tail), |ui, range| {
             for index in range {
+                if tail && index == count {
+                    feed_tail(app, ui, list_w, row_h);
+                    continue;
+                }
                 let Some(video) = item_at(app, index) else {
                     continue;
                 };
@@ -512,7 +536,8 @@ fn empty_state(app: &mut App, ui: &mut egui::Ui) {
                 // the block is pushed down to the middle by hand: stacking it
                 // from the top leaves the spinner up under the toolbar.
                 ui.add_space(((ui.available_height() - LOADING_BLOCK_H) / 2.0).max(0.0));
-                ui.add(egui::Spinner::new().size(26.0));
+                let ink = ui.visuals().strong_text_color();
+                crate::ui::spinner(ui, 26.0, ink);
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(app.status.clone())
@@ -555,8 +580,165 @@ fn footer(app: &mut App, ui: &mut egui::Ui) {
             .color(muted()),
         );
         if app.feed_state.loading {
-            ui.add(egui::Spinner::new().size(14.0));
+            let ink = ui.visuals().strong_text_color();
+            crate::ui::spinner(ui, 14.0, ink);
         }
     });
 }
 
+/// What the end of a feed has to say, which is also what it does when clicked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FeedTail {
+    /// Another page can be fetched.
+    More,
+    /// A page is on its way, so the button reports progress instead of
+    /// offering a click that would be refused.
+    Loading,
+    /// Nothing left to fetch.
+    End,
+}
+
+/// Kept apart from the drawing so the one decision that matters - a load in
+/// flight wins over "there is more" - is testable without a window.
+fn tail_state(loading: bool, has_more: bool) -> FeedTail {
+    if loading {
+        FeedTail::Loading
+    } else if has_more {
+        FeedTail::More
+    } else {
+        FeedTail::End
+    }
+}
+
+/// The accent as a wash over whatever is behind it, so the button reads as
+/// tinted rather than as a solid block of colour.
+fn wash(alpha: f32) -> egui::Color32 {
+    let accent = accent();
+    egui::Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        (255.0 * alpha.clamp(0.0, 1.0)) as u8,
+    )
+}
+
+/// The arrow inside the button: a shaft and a chevron head, both strokes.
+///
+/// Drawn rather than taken from an SVG set: one 16pt glyph is not worth an SVG
+/// rasteriser in the dependency tree, and a path of three points is exact at
+/// every scale - the same reason the detail pane's close cross is two line
+/// segments.
+fn tail_arrow(painter: &egui::Painter, centre: egui::Pos2, colour: egui::Color32, drop: f32) {
+    let stroke = egui::Stroke::new(2.0, colour);
+    let tip = egui::pos2(centre.x, centre.y + 7.0 + drop);
+    // The shaft stops at the tip and the head is painted over it, so the two
+    // read as one arrow rather than a stem with a chevron hanging under it.
+    painter.line_segment([egui::pos2(centre.x, centre.y - 8.0 + drop), tip], stroke);
+    painter.add(egui::Shape::line(
+        vec![
+            egui::pos2(tip.x - 5.5, tip.y - 5.5),
+            tip,
+            egui::pos2(tip.x + 5.5, tip.y - 5.5),
+        ],
+        stroke,
+    ));
+}
+
+/// Closes a feed with a round button that fetches the next page.
+///
+/// A row of the scroller rather than a bar under it - the footer's paging
+/// buttons already are that bar - because the end of the feed is where a reader
+/// who wants more has just arrived. The row is allocated at the height the
+/// scroller was calibrated with, so its bookkeeping still matches what is
+/// drawn; the button is a circle `TAIL_GAP` below that row's top edge, and only
+/// the circle answers the pointer.
+///
+/// No label: the arrow is the whole affordance, and the number it would have
+/// printed - the page size - is already in the footer's `Next` button and the
+/// status line. The hover text carries the explanation instead.
+fn feed_tail(app: &mut App, ui: &mut egui::Ui, width: f32, row_h: f32) {
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::hover());
+    let phase = tail_state(app.feed_state.loading, app.has_more());
+    // Close under the tiles rather than in the middle of a whole tile-row: the
+    // row has to be as tall as every other row for the scroller, so the button
+    // is pinned `TAIL_GAP` below the row's top edge and the rest of the row is
+    // air underneath it.
+    let centre = egui::pos2(row.center().x, row.top() + TAIL_GAP + TAIL_BUTTON / 2.0);
+    let hit = egui::Rect::from_center_size(
+        centre,
+        egui::vec2(TAIL_BUTTON + 8.0, TAIL_BUTTON + 8.0),
+    );
+    let response = ui.interact(hit, ui.make_persistent_id("feed_tail"), egui::Sense::click());
+    // A short fade rather than a snap: answering the pointer is most of what
+    // makes a painted circle read as a button.
+    let hover = ui.ctx().animate_bool_with_time(
+        response.id,
+        phase == FeedTail::More && response.hovered(),
+        0.12,
+    );
+
+    match phase {
+        FeedTail::More => {
+            let radius = TAIL_BUTTON / 2.0 + 2.0 * hover;
+            if hover > 0.01 {
+                // A ring that fades in around it, so the hover reads at a glance
+                // without the button itself having to jump in colour.
+                ui.painter().circle_stroke(
+                    centre,
+                    radius + 5.0,
+                    egui::Stroke::new(1.0, wash(0.22 * hover)),
+                );
+            }
+            ui.painter().circle(
+                centre,
+                radius,
+                wash(0.16 + 0.12 * hover),
+                egui::Stroke::new(1.0, wash(0.55 + 0.45 * hover)),
+            );
+            // The arrow drops as the button grows, so the hover points the way
+            // the click goes.
+            tail_arrow(ui.painter(), centre, accent(), 2.5 * hover);
+            response
+                .clone()
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Fetch the next page (.)");
+        }
+        FeedTail::Loading => {
+            ui.painter().circle(
+                centre,
+                TAIL_BUTTON / 2.0,
+                wash(0.07),
+                egui::Stroke::new(1.0, wash(0.30)),
+            );
+            let ring =
+                egui::Rect::from_center_size(centre, egui::vec2(TAIL_SPINNER, TAIL_SPINNER));
+            crate::ui::spinner_at(ui, ring, accent());
+        }
+        FeedTail::End => {
+            // Nothing left to fetch, and no text to say so: a short rule closes
+            // the list the way a line under a signature does.
+            let rule = egui::Rect::from_center_size(centre, egui::vec2(44.0, 2.0));
+            ui.painter()
+                .rect_filled(rule, 1.0, muted().gamma_multiply(0.55));
+        }
+    }
+    if phase == FeedTail::More && response.clicked() {
+        app.load_next_page();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_in_flight_turns_the_end_of_the_feed_into_progress() {
+        assert_eq!(tail_state(false, true), FeedTail::More);
+        assert_eq!(
+            tail_state(true, true),
+            FeedTail::Loading,
+            "a second click while a page is on its way would be refused, so the button must not offer one"
+        );
+        assert_eq!(tail_state(false, false), FeedTail::End);
+    }
+}
