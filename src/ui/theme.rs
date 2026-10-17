@@ -31,9 +31,9 @@ pub const T_CAPTION: f32 = 10.5;
 // --- Card metrics ----------------------------------------------------------
 
 /// Corner radius of a card.
-pub const CARD_RADIUS: f32 = 10.0;
+pub const CARD_RADIUS: f32 = 7.0;
 /// Corner radius of a thumbnail inside a card.
-pub const THUMB_RADIUS: f32 = 8.0;
+pub const THUMB_RADIUS: f32 = 7.0;
 /// Padding between a card's edge and its contents.
 pub const CARD_PAD: f32 = 8.0;
 /// Gap between cards, horizontally and vertically.
@@ -41,7 +41,7 @@ pub const CARD_GAP: f32 = 10.0;
 /// Room under a grid thumbnail for the title and the meta line.
 pub const CARD_TEXT_H: f32 = 52.0;
 /// Baseline of a card title, measured down from the bottom of the thumbnail.
-pub const CARD_TITLE_GAP: f32 = 17.0;
+pub const CARD_TITLE_GAP: f32 = 21.0;
 /// Corner radius of a badge (duration, LIVE).
 pub const BADGE_RADIUS: f32 = 4.0;
 

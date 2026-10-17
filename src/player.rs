@@ -87,14 +87,7 @@ impl Player {
     /// `default` - verified to offer 720p/1080p and to return fetchable URLs.
     pub fn ytdl_args(&self, profile: &str) -> Vec<String> {
         let mut args = vec![format!("--ytdl-format={profile}")];
-        if let Some(browser) = self.cookies_from_browser() {
-            args.push(format!("--ytdl-raw-options=cookies-from-browser={browser}"));
-        }
-        if let Some(client) = self.single_client() {
-            args.push(format!(
-                "--ytdl-raw-options=extractor-args=youtube:player_client={client}"
-            ));
-        }
+
         args
     }
 

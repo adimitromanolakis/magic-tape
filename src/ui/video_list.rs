@@ -172,13 +172,13 @@ fn grid_card(
         (
             ui.visuals().widgets.hovered.bg_fill,
             ui.visuals().widgets.hovered.bg_stroke.color,
-            2.0,
+            0.5,
         )
     } else {
         (
-            ui.visuals().panel_fill,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
-            1.0,
+            egui::Color32::TRANSPARENT,
+            egui::Color32::TRANSPARENT,
+            0.0,
         )
     };
     ui.painter().rect(
