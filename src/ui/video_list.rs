@@ -5,8 +5,8 @@ use crate::config::ListView;
 use crate::model::Video;
 use crate::ui::{
     accent, ellipsize, live_color, muted, selected_fill, text_width, title_color, BADGE_RADIUS,
-    CARD_GAP, CARD_PAD, CARD_RADIUS, CARD_TEXT_H, CARD_TITLE_GAP, SCROLLBAR_GAP, T_CAPTION, T_META,
-    T_TITLE, THUMB_RADIUS,
+    CARD_GAP, CARD_PAD, CARD_RADIUS, CARD_TEXT_H, CARD_TITLE_GAP, SCROLLBAR_GAP, T_BODY, T_CAPTION,
+    T_META, T_TITLE, THUMB_RADIUS,
 };
 
 /// Row geometry for the compact video list.
@@ -24,6 +24,10 @@ const LIST_ROW_H: f32 = LIST_ROW_CONTENT_H + 2.0 * LIST_ROW_MARGIN;
 const CHANNEL_TILE_W: f32 = 190.0;
 /// Room under the avatar for the name and the subscriber count.
 const CHANNEL_CARD_TEXT_H: f32 = 40.0;
+
+/// Height of the loading block - spinner, gap, one line of text - used to put
+/// the middle of it in the middle of the panel.
+const LOADING_BLOCK_H: f32 = 50.0;
 
 pub fn content(app: &mut App, ui: &mut egui::Ui) {
     match app.section {
@@ -498,10 +502,24 @@ fn channel_list(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn empty_state(app: &mut App, ui: &mut egui::Ui) {
+    // A load from the top leaves the list empty while it runs, and this is what
+    // that empty panel shows: the spinner, and the `status` line saying what is
+    // being fetched.
     if app.feed_state.loading || app.worker.busy() {
         ui.centered_and_justified(|ui| {
-            ui.add(egui::Spinner::new());
-            ui.label(egui::RichText::new(app.status.clone()).color(muted()));
+            ui.vertical_centered(|ui| {
+                // `centered_and_justified` hands its child the whole area, so
+                // the block is pushed down to the middle by hand: stacking it
+                // from the top leaves the spinner up under the toolbar.
+                ui.add_space(((ui.available_height() - LOADING_BLOCK_H) / 2.0).max(0.0));
+                ui.add(egui::Spinner::new().size(26.0));
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(app.status.clone())
+                        .size(T_BODY)
+                        .color(muted()),
+                );
+            });
         });
         return;
     }

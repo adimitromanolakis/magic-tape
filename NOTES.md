@@ -77,7 +77,7 @@ Rules that keep this sane:
 | File | Lines | Responsibility |
 | --- | --- | --- |
 | `src/main.rs` | 437 | Window/panel composition, CLI args, key handling, selection movement |
-| `src/app.rs` | 1883 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
+| `src/app.rs` | 1996 | Application state, actions (play/like/subscribe/download), `Outcome` handling, navigation helpers |
 | `src/model.rs` | 645 | `Video`/`Channel`/`Comment` types + **all** yt-dlp JSON parsing, time/number formatting |
 | `src/yt.rs` | 990 | The yt-dlp command line; one `run()` that logs everything; per-video comment files; URL encode/decode |
 | `src/player.rs` | 443 | mpv invocation, log forwarding, exit-status watcher, notifications, `opener` |
@@ -88,7 +88,7 @@ Rules that keep this sane:
 | `src/config.rs` | 466 | `Config` (TOML, `#[serde(default)]`), `Paths`, legacy `magic-tape.conf` import |
 | `src/ui/sidebar.rs` | 292 | Nav, feed list, subscription quick access, replay-previous-action |
 | `src/ui/toolbar.rs` | 304 | Two-row toolbar + `paging_controls()` (shared with the list footer) |
-| `src/ui/video_list.rs` | 544 | Virtualised grid, compact list, channel list, context menus, empty state |
+| `src/ui/video_list.rs` | 562 | Virtualised grid, compact list, channel list, context menus, empty state |
 | `src/ui/detail.rs` | 510 | Detail rail: picture, action buttons, description, comments, floating close button |
 | `src/ui/settings.rs` | 654 | Settings window (4 tabs) + shortcuts window |
 | `src/ui/toasts.rs` | 47 | Toast overlay (anchored below the toolbar) + status bar |
@@ -372,6 +372,35 @@ This is a new API surface; several things differ from older tutorials.
     cross is two `line_segment`s rather than a glyph: egui has no bold face, so `RichText::strong()`
     only brightens text and a heavier X has to be a heavier stroke.
 
+17. **A load from the top clears the list as it *starts*, not when it lands.** Clicking another feed
+    kept the outgoing feed on screen until the new one arrived: a stale grid that reads as if the
+    click did nothing, with nothing on screen saying otherwise. `App::begin_load` - split out of
+    `load_feed` the way `begin_search` is, so the transition is testable without yt-dlp - now drops
+    `feed_state` (and the selection with it, which empties the detail pane) before the job is
+    spawned. The empty list is the point: `video_list::empty_state` is what draws the spinner, and
+    the `status` line is what says which feed is being fetched.
+
+    Two scoping rules are load-bearing. The clear happens only for `start == 0`, because a later
+    page is *appended* to what is already loaded and paging must not blank the list. And
+    `scroll_to_index` is set to the top, because the old offset means nothing in a list that has not
+    arrived yet. One consequence worth knowing: a feed load that *fails* now leaves an empty view
+    with the error toast as the only trace, where it used to leave the previous feed.
+
+    Emptying the list exposed the second half of the same bug, which was there all along: two loads
+    can be in flight at once (nothing cancels the first), so the answer to the feed the user just
+    left arrives *after* the new list was emptied and paints the old feed into it - the same thing
+    the user complained about, from the other end. `App::feed_request` records `(feed, query,
+    channel, start)` as the request goes out, and `handle_outcome` drops an answer that does not
+    match it (with a log line). All four parts are needed: two searches differ only in the query,
+    and one channel's page from another's differ only in the channel, both at `start == 0`. The
+    guard also has to come before the branch clears `feed_state.loading`, or a stale answer would
+    stop the spinner while its successor was still running.
+
+    The spinner and its caption are placed by hand inside `centered_and_justified`, which hands its
+    child the whole area: stacking them from the top puts the block up under the toolbar (§6.4 has
+    the measurement), so the block's height is subtracted from the available height and half the
+    remainder added above it.
+
 ### 6.4 Verifying changes on this machine
 
 - **The real X display is `:0`** (Xorg + KWin, AMD Radeon RX 6750 XT, VA-API). `DISPLAY` is
@@ -390,6 +419,18 @@ This is a new API surface; several things differ from older tutorials.
   were proven; it is faster and more reliable than reading logs after the fact.
 - **Never `pkill -f "release/magic-tape"`.** The pattern matches the invoking shell's own command
   line and kills it. Record `$!` and `kill` the PID.
+- **Screenshot *into* a transient state, don't try to catch it.** A loading state is gone in a
+  second or two, so drive it and grab frames. `xdotool key r` (refresh) goes through the same
+  `load_feed(feed, 0)` that the sidebar's feed rows do, which makes the clear in §6.3.17 checkable
+  without guessing at coordinates: sample the content area for pixels that differ from the panel
+  fill, before, during and after - one process sampling in a loop, because a shell round trip per
+  frame is slower than the window being measured. The last run: 68.2% of the sampled pixels drawn,
+  **0.1%** for the second the fetch took - nothing but the spinner and its caption, at y 474 in a
+  panel spanning 115..834, whose centre is 474.5, and x 793.5 in a panel spanning 236..1360, centre
+  798 (the 4.5px is the faint ellipsis at the end of the caption, not the layout) - then 66.2% once
+  it landed. The block's bbox wobbled between samples (y 339, 330, 345), which is the spinner
+  turning. Counting ink is also what caught the caption's placement: the first version stacked it
+  at the top of the panel, y 120.
 - Screenshot with `import -window <id> out.png` (ImageMagick is installed).
 
 ## 7. Change playbooks
@@ -444,6 +485,7 @@ changes, which is the quickest way to catch a layout that moves on its own.
 | mpv argument construction | `passes_format_cookies_and_client_to_mpv`, `drops_client_lists_because_mpv_cannot_pass_them` |
 | Navigation maths | `page_step_is_one_screenful_minus_one_row`, `selection_clamps_at_both_ends`, `scroll_offset_centres_the_selected_row`, `select_requests_a_scroll_only_when_the_selection_changes` |
 | Detail pane state | `a_selection_shows_the_detail_pane_and_clearing_it_hides_the_pane` |
+| Feed loading | `a_load_from_the_top_empties_the_list_while_it_runs`, `loading_a_later_page_keeps_the_list_on_screen`, `an_answer_overtaken_by_a_newer_load_is_dropped` |
 | Icons | `reads_a_setting_and_ignores_comments`, `inheritance_chains_are_split_and_trimmed`, `candidates_try_the_asked_size_first_and_scalable_last`, `sizeless_symbolic_directories_are_tried`, `an_unusual_size_still_gets_a_candidate`, `a_missing_theme_still_falls_back_to_the_toolkit_defaults`, `search_order_follows_inheritance`, `the_users_gtk_theme_wins_over_the_default` |
 | Design tokens | `the_type_scale_is_ordered_from_caption_to_app`, `the_card_text_zone_holds_a_title_over_a_meta_line`, `a_selected_fill_stays_a_tint_of_the_accent`, `a_colour_setting_takes_the_forms_a_person_would_type`, `an_unusable_colour_setting_leaves_the_pane_on_the_theme` |
 | Thumbnails | `reads_the_video_id_out_of_a_thumbnail_url`, `spotts_the_owner_only_variants`, `variants_are_the_same_video_sharpest_first`, `a_url_from_elsewhere_is_left_alone`, `a_failed_id_is_never_asked_for_again` |

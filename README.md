@@ -142,6 +142,14 @@ its top-right corner, where it stays while the details scroll and hides the pane
 selection - which is how the column it covers comes back. The pane's left edge can be dragged to
 resize it. See `detail_background` below for its colour.
 
+### Switching feeds
+
+Picking another feed, refreshing with `R`, or searching the feeds clears the grid as the request goes
+out, and the empty grid shows a spinner with what is being fetched. The feed that is being replaced
+is never left on screen looking like the answer to the click. Loading a *page* is the other way
+round: the next page is appended to what is already there, and the list, the selection and the
+scroll position stay where they were.
+
 ### Keyboard shortcuts
 
 | Key | Action |

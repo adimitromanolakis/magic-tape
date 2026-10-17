@@ -99,6 +99,14 @@ pub struct App {
     pub history: Vec<crate::store::HistoryEntry>,
 
     pub feed_state: FeedState,
+    /// The load the list is waiting for, as it was asked for: `(feed, query,
+    /// channel, start)`.
+    ///
+    /// Every load from the top empties the list, so without this an outcome a
+    /// newer load has overtaken would paint the feed the user just left - or
+    /// the search they just retyped - into the list that was cleared for its
+    /// successor.
+    feed_request: Option<(Feed, Option<String>, String, usize)>,
     pub selected: Option<usize>,
     pub detail: Detail,
     /// Width of the floating detail pane, dragged by its left edge.
@@ -200,6 +208,7 @@ impl App {
             liked: Vec::new(),
             history: Vec::new(),
             feed_state: FeedState::default(),
+            feed_request: None,
             selected: None,
             detail: Default::default(),
             detail_width: 340.0,
@@ -311,12 +320,10 @@ impl App {
             .map(str::to_string);
         let channel = self.channel_id.clone();
         let count = self.list_length();
-        self.feed_state.loading = true;
-        self.status = if start == 0 {
-            format!("Loading {}...", feed.label())
-        } else {
-            format!("Loading more {}...", feed.label())
-        };
+        // What this list is waiting for, so `handle_outcome` can tell this
+        // request's answer from one that a newer load has overtaken.
+        self.feed_request = Some((feed, query.clone(), channel.clone(), start));
+        self.begin_load(feed, start);
         self.worker.spawn("load feed", JobKind::Ytdlp,
             move || match yt.list_feed(feed, &channel, query.as_deref(), filter, start, count) {
             Ok(listing) => Outcome::FeedLoaded {
@@ -331,6 +338,34 @@ impl App {
                 error: error.to_string(),
             },
         });
+    }
+
+    /// The state a load starts in, split out from the request itself the way
+    /// `begin_search` is, so the transition can be tested without yt-dlp.
+    ///
+    /// A load from the top *replaces* the list, so the outgoing feed is dropped
+    /// as the load starts rather than when the new one lands: the empty list is
+    /// what draws the spinner, and a grid that is about to be replaced reads as
+    /// if the click did nothing while it waits. A later page is *appended* to
+    /// what is already there, so it keeps it.
+    fn begin_load(&mut self, feed: Feed, start: usize) {
+        if start == 0 {
+            self.feed_state = FeedState::default();
+            // Clearing the selection empties the detail pane with it, so no
+            // part of the view is describing a video that is no longer listed.
+            self.select(None);
+            // The old scroll offset means nothing in a list that has not
+            // arrived yet; open the new one at the top.
+            self.scroll_to_index = Some(0);
+            // A page that edge-paging asked for belongs to the dropped list.
+            self.pending_select = None;
+        }
+        self.feed_state.loading = true;
+        self.status = if start == 0 {
+            format!("Loading {}...", feed.label())
+        } else {
+            format!("Loading more {}...", feed.label())
+        };
     }
 
     pub fn load_playlists(&mut self, query: &str, start: usize) {
@@ -1034,6 +1069,16 @@ impl App {
                 start,
                 videos,
             } => {
+                if self.feed_request
+                    != Some((feed, query.clone(), channel.clone(), start))
+                {
+                    // The user has since asked for something else, whose own
+                    // load emptied the list: this answer belongs to a list that
+                    // no longer exists, and applying it would both show the
+                    // wrong feed and declare a load that is still running done.
+                    log::info!("[feed] dropped an overtaken answer for {feed:?} (start {start})");
+                    return;
+                }
                 let loaded = videos.len();
                 self.feed_state.has_more = loaded >= self.list_length();
                 if start == 0 {
@@ -1800,6 +1845,74 @@ mod tests {
         assert!(app.detail_open, "selecting again brings it back");
         app.select(None);
         assert!(!app.detail_open, "clearing the selection closes it too");
+    }
+
+    #[test]
+    fn a_load_from_the_top_empties_the_list_while_it_runs() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.feed_state.videos = (0..4).map(|n| fake_video(&format!("id{n}"))).collect();
+        app.select(Some(2));
+        assert!(app.detail_open, "the pane is describing the selected video");
+
+        app.begin_load(Feed::Trending, 0);
+
+        // The empty list is what the spinner is drawn for; the outgoing feed
+        // must not stay on screen looking like the answer.
+        assert!(
+            app.feed_state.videos.is_empty(),
+            "the feed being replaced is dropped as the load starts"
+        );
+        assert!(app.feed_state.loading, "and the load reads as running");
+        assert_eq!(app.selected, None, "nothing left in the list to select");
+        assert!(!app.detail_open, "nor anything for the pane to describe");
+        assert_eq!(app.scroll_to_index, Some(0), "the new list opens at the top");
+        assert_eq!(app.status, "Loading Trending...");
+    }
+
+    #[test]
+    fn an_answer_overtaken_by_a_newer_load_is_dropped() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        // The list is waiting for Trending. A subscriptions page still in
+        // flight - from the feed the user just left - must not land in it.
+        app.feed_state = FeedState::default();
+        app.feed_state.loading = true;
+        app.feed_request = Some((Feed::Trending, None, String::new(), 0));
+
+        app.handle_outcome(Outcome::FeedLoaded {
+            feed: Feed::Subscriptions,
+            channel: String::new(),
+            query: None,
+            start: 0,
+            videos: (0..3).map(|n| fake_video(&format!("old{n}"))).collect(),
+        });
+
+        assert!(
+            app.feed_state.videos.is_empty(),
+            "the overtaken feed is not painted into the emptied list"
+        );
+        assert!(
+            app.feed_state.loading,
+            "and the load it belongs to is still reported as running"
+        );
+    }
+
+    #[test]
+    fn loading_a_later_page_keeps_the_list_on_screen() {
+        let mut app = App::new(&egui::Context::default(), Startup::default());
+        app.feed_state.videos = (0..4).map(|n| fake_video(&format!("id{n}"))).collect();
+        app.select(Some(1));
+
+        app.begin_load(Feed::Subscriptions, 20);
+
+        assert_eq!(
+            app.feed_state.videos.len(),
+            4,
+            "a later page is appended to the list, not instead of it"
+        );
+        assert_eq!(app.selected, Some(1), "and the reader keeps their place");
+        assert!(app.detail_open);
+        assert!(app.feed_state.loading);
+        assert_eq!(app.status, "Loading more Subscriptions...");
     }
 }
 
