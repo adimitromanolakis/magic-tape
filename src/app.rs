@@ -1324,7 +1324,6 @@ pub fn comments_should_start(settled_for: Duration) -> bool {
 fn feed_label(feed: Feed) -> &'static str {
     match feed {
         Feed::Subscriptions => "subscriptions",
-        Feed::Trending => "trending",
         Feed::Recommended => "recommended",
         Feed::Channel => "channel",
         Feed::Repeat => "repeat",
@@ -1747,13 +1746,12 @@ mod tests {
     #[test]
     fn only_the_search_feed_carries_the_query() {
         // The bug: a stored query turned every later request into a search, so
-        // clicking a channel or Trending kept showing the same results.
+        // clicking a channel or the For you feed kept showing the same results.
         assert_eq!(search_query_for(Feed::Search, "rust"), Some("rust"));
         assert_eq!(search_query_for(Feed::Search, "  rust  "), Some("rust"));
         assert_eq!(search_query_for(Feed::Search, "   "), None);
         for feed in [
             Feed::Subscriptions,
-            Feed::Trending,
             Feed::Recommended,
             Feed::Channel,
             Feed::Repeat,
@@ -1783,11 +1781,11 @@ mod tests {
     #[test]
     fn leaving_a_search_returns_to_the_previous_feed() {
         let mut app = App::new(&egui::Context::default(), Startup::default());
-        app.feed = Feed::Trending;
+        app.feed = Feed::Recommended;
         assert!(app.begin_search("rust"));
-        assert_eq!(app.feed_before_search, Feed::Trending);
-        assert_eq!(app.end_search(), Some(Feed::Trending));
-        assert_eq!(app.feed, Feed::Trending);
+        assert_eq!(app.feed_before_search, Feed::Recommended);
+        assert_eq!(app.end_search(), Some(Feed::Recommended));
+        assert_eq!(app.feed, Feed::Recommended);
         assert_eq!(app.query, "", "the term must not outlive the search");
     }
 
@@ -1811,10 +1809,10 @@ mod tests {
     #[test]
     fn leaving_a_search_from_another_feed_only_clears_the_term() {
         let mut app = App::new(&egui::Context::default(), Startup::default());
-        app.feed = Feed::Trending;
+        app.feed = Feed::Recommended;
         app.query = "rust".into();
         assert_eq!(app.end_search(), None, "no search to leave, no feed to load");
-        assert_eq!(app.feed, Feed::Trending, "the feed stays put");
+        assert_eq!(app.feed, Feed::Recommended, "the feed stays put");
         assert_eq!(app.query, "");
     }
 
@@ -1854,7 +1852,7 @@ mod tests {
         app.select(Some(2));
         assert!(app.detail_open, "the pane is describing the selected video");
 
-        app.begin_load(Feed::Trending, 0);
+        app.begin_load(Feed::Recommended, 0);
 
         // The empty list is what the spinner is drawn for; the outgoing feed
         // must not stay on screen looking like the answer.
@@ -1866,17 +1864,17 @@ mod tests {
         assert_eq!(app.selected, None, "nothing left in the list to select");
         assert!(!app.detail_open, "nor anything for the pane to describe");
         assert_eq!(app.scroll_to_index, Some(0), "the new list opens at the top");
-        assert_eq!(app.status, "Loading Trending...");
+        assert_eq!(app.status, "Loading For you...");
     }
 
     #[test]
     fn an_answer_overtaken_by_a_newer_load_is_dropped() {
         let mut app = App::new(&egui::Context::default(), Startup::default());
-        // The list is waiting for Trending. A subscriptions page still in
+        // The list is waiting for the For you feed. A subscriptions page still in
         // flight - from the feed the user just left - must not land in it.
         app.feed_state = FeedState::default();
         app.feed_state.loading = true;
-        app.feed_request = Some((Feed::Trending, None, String::new(), 0));
+        app.feed_request = Some((Feed::Recommended, None, String::new(), 0));
 
         app.handle_outcome(Outcome::FeedLoaded {
             feed: Feed::Subscriptions,

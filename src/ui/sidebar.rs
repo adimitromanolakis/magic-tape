@@ -28,9 +28,8 @@ pub fn sidebar(app: &mut App, ui: &mut egui::Ui) {
     nav(app, ui, "Feeds", Section::Feeds);
     if app.section == Section::Feeds {
         ui.indent("feed_items", |ui| {
-            feed_item(app, ui, Feed::Subscriptions, "Subscriptions");
-            feed_item(app, ui, Feed::Trending, "Trending");
             feed_item(app, ui, Feed::Recommended, "For you");
+            feed_item(app, ui, Feed::Subscriptions, "Subscriptions");
             feed_item(app, ui, Feed::Channel, "Channel");
             if app.store.last_action().is_some() {
                 feed_item(app, ui, Feed::Repeat, "Previous action");
@@ -128,7 +127,6 @@ fn replay(app: &mut App) {
     };
     app.query = yt::urldecode(&action.query);
     match action.feed.as_str() {
-        "trending" => app.feed = Feed::Trending,
         "recommended" => app.feed = Feed::Recommended,
         "channel" => {
             app.feed = Feed::Channel;

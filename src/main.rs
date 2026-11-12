@@ -52,14 +52,13 @@ fn parse_args() -> Startup {
             "--search" | "-s" => startup.query = args.next(),
             "--feed" | "-f" => {
                 startup.feed = match args.next().as_deref() {
-                    Some("trending") => Some(Feed::Trending),
                     Some("recommended") | Some("foryou") => Some(Feed::Recommended),
                     _ => Some(Feed::Subscriptions),
                 }
             }
             "--help" | "-h" => {
                 println!(
-                    "magic-tape\n\nUSAGE:\n    magic-tape [OPTIONS] [QUERY]\n\nOPTIONS:\n    -s, --search <QUERY>    open straight into a search\n    -f, --feed <FEED>      subscriptions | trending | recommended\n    -h, --help             print this help"
+                    "magic-tape\n\nUSAGE:\n    magic-tape [OPTIONS] [QUERY]\n\nOPTIONS:\n    -s, --search <QUERY>    open straight into a search\n    -f, --feed <FEED>      foryou | subscriptions\n    -h, --help             print this help"
                 );
                 std::process::exit(0);
             }

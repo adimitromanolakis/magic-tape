@@ -4,7 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feed {
     Subscriptions,
-    Trending,
     Recommended,
     Search,
     Channel,
@@ -15,7 +14,6 @@ impl Feed {
     pub fn path(&self, channel: &str) -> String {
         match self {
             Feed::Subscriptions => "/feed/subscriptions".into(),
-            Feed::Trending => "/feed/trending".into(),
             Feed::Recommended => String::new(),
             Feed::Search => String::new(),
             Feed::Channel => {
@@ -32,7 +30,6 @@ impl Feed {
     pub fn label(&self) -> &'static str {
         match self {
             Feed::Subscriptions => "Subscriptions",
-            Feed::Trending => "Trending",
             Feed::Recommended => "For you",
             Feed::Search => "Search results",
             Feed::Channel => "Channel",
@@ -41,7 +38,7 @@ impl Feed {
     }
 
     pub fn request_needs_extractor_args(&self) -> bool {
-        matches!(self, Feed::Subscriptions | Feed::Trending | Feed::Recommended)
+        matches!(self, Feed::Subscriptions | Feed::Recommended)
     }
 }
 

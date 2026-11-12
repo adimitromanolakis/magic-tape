@@ -115,15 +115,14 @@ impl YtDlp {
         args.push("-J".into());
         args.push(format!("https://www.youtube.com{path}"));
 
-        // Subscriptions and trending need the account; everything else is
-        // public and costs about a second less without cookies.
+        // Subscriptions and the For you feed need the account; everything else
+        // is public and costs about a second less without cookies.
         let auth = match feed {
-            Feed::Subscriptions | Feed::Trending | Feed::Recommended => Auth::SignedIn,
+            Feed::Subscriptions | Feed::Recommended => Auth::SignedIn,
             Feed::Search | Feed::Channel | Feed::Repeat => Auth::Public,
         };
         let out = self
-            .run_with_auth("list-feed", &args, None, auth)
-            .map_err(|error| explain(feed, error))?;
+            .run_with_auth("list-feed", &args, None, auth)?;
         if auth == Auth::SignedIn && !out.contains("\"entries\"") {
             // Anonymous requests to the subscriptions feed come back as an
             // empty playlist rather than an error, which is how a broken
@@ -435,7 +434,7 @@ pub enum Auth {
     /// videos. Try without cookies, because carrying them is the expensive
     /// part, and fall back only if YouTube insists.
     Public,
-    /// Needs the account: subscriptions, trending, downloads.
+    /// Needs the account: subscriptions, the For you feed, downloads.
     SignedIn,
 }
 
@@ -457,18 +456,6 @@ pub fn looks_like_auth_failure(message: &str) -> bool {
     ];
     let lower = message.to_lowercase();
     MARKERS.iter().any(|marker| lower.contains(marker))
-}
-
-fn explain(feed: Feed, error: anyhow::Error) -> anyhow::Error {
-    let message = error.to_string();
-    if matches!(feed, Feed::Trending)
-        && (message.contains("trending") || message.contains("does not exist"))
-    {
-        return anyhow::anyhow!(
-            "YouTube retired the Trending feed, so this list can no longer be loaded. Try a search or the For you feed."
-        );
-    }
-    error
 }
 
 /// How many videos' comments to keep.
@@ -690,7 +677,7 @@ mod tests {
         // clicking a channel after searching kept returning search results.
         for (feed, channel, expected) in [
             (Feed::Subscriptions, "", "/feed/subscriptions"),
-            (Feed::Trending, "", "/feed/trending"),
+            (Feed::Recommended, "", ""),
             (Feed::Channel, "UC123", "/channel/UC123/videos"),
             (Feed::Channel, "@handle", "/@handle/videos"),
         ] {
@@ -875,7 +862,7 @@ mod tests {
             .unwrap();
         yt.list_feed(Feed::Channel, "UC123", Some("rust"), DurationFilter::Any, 0, 5)
             .unwrap();
-        yt.list_feed(Feed::Trending, "", Some("rust"), DurationFilter::Any, 0, 5)
+        yt.list_feed(Feed::Recommended, "", Some("rust"), DurationFilter::Any, 0, 5)
             .unwrap();
         yt.list_feed(Feed::Channel, "UC123", None, DurationFilter::Any, 0, 5)
             .unwrap();
@@ -891,7 +878,7 @@ mod tests {
             )
         );
         assert_eq!(urls[1], "https://www.youtube.com/channel/UC123/videos");
-        assert_eq!(urls[2], "https://www.youtube.com/feed/trending");
+        assert_eq!(urls[2], "https://www.youtube.com");
         assert_eq!(urls[3], "https://www.youtube.com/channel/UC123/videos");
         std::fs::remove_dir_all(&dir).ok();
     }
